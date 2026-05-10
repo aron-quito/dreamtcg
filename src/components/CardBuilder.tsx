@@ -7,7 +7,9 @@ import {
   Zap, 
   Target, 
   Coins, 
-  PlayCircle 
+  PlayCircle,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { 
   CardDefinition, 
@@ -264,6 +266,8 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ onSave, initialCard })
     isCustom: true
   });
 
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
   const addEffect = () => {
     const newEffect: CardEffect = {
       id: crypto.randomUUID(),
@@ -289,27 +293,42 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ onSave, initialCard })
   const { fontSize: effectFontSize, containerRef: effectsContainerRef } = useDynamicFontSize(card);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 p-4">
-      {/* Visual Preview */}
-      <div className="space-y-4 flex flex-col items-center">
-        <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Card Preview (Scale 1.5x)</h3>
-        
-        {/* Card Container with fixed aspect ratio 63:88 and expanded size */}
-        <div 
-          className="bg-slate-900 border border-slate-800 rounded-[3%] shadow-2xl relative overflow-hidden flex flex-col"
-          style={{ width: '350px', height: '488px', padding: '15px' }}
-        >
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 to-purple-500" />
-          
-          {/* Header */}
-          <div className="flex justify-between items-center mb-1">
-            <h4 className="text-lg font-black uppercase tracking-tighter text-white truncate max-w-[80%] drop-shadow-md">
-              {card.name || "Unnamed Card"}
-            </h4>
-            <span className="text-[10px] font-bold bg-slate-800 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded shadow-inner shrink-0">
-              {card.attribute}
-            </span>
-          </div>
+    <div className="flex flex-col lg:flex-row gap-0 lg:gap-8 p-0 md:p-6 max-w-[1600px] mx-auto min-h-screen transition-all duration-500 ease-in-out">
+      {/* Visual Preview - Sticky on Desktop with Collapse Logic */}
+      <div 
+        className={`shrink-0 transition-all duration-500 ease-in-out relative border-r lg:border-r-0 border-slate-800 lg:bg-transparent bg-slate-950/50 backdrop-blur-md z-20
+          ${isSidebarCollapsed ? 'w-0 lg:w-16 overflow-hidden opacity-0 lg:opacity-100' : 'w-full lg:w-[400px] p-4 lg:p-0'}`}
+      >
+        <div className={`lg:sticky lg:top-6 space-y-4 flex flex-col items-center ${isSidebarCollapsed ? 'lg:pt-20' : ''}`}>
+          {!isSidebarCollapsed ? (
+            <>
+              <div className="flex items-center justify-between w-full max-w-[350px] mb-2 px-2">
+                <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em]">Card Preview</h3>
+                <button 
+                  onClick={() => setIsSidebarCollapsed(true)}
+                  className="p-1.5 hover:bg-slate-800 rounded-full text-slate-500 transition-colors hidden lg:block"
+                  title="Collapse Preview"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+              </div>
+              
+              {/* Card Container */}
+              <div 
+                className="bg-slate-900 border border-slate-800 rounded-[3%] shadow-2xl relative overflow-hidden flex flex-col w-full max-w-[350px] aspect-[63/88] group cursor-default"
+                style={{ padding: '4.2%' }}
+              >
+                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-500 animate-gradient-x" />
+            
+            {/* Header */}
+            <div className="flex justify-between items-center mb-[2%]">
+              <h4 className="text-[14px] md:text-[16px] font-black uppercase tracking-tighter text-white truncate max-w-[75%] drop-shadow-md">
+                {card.name || "UNNAMED CARD"}
+              </h4>
+              <span className="text-[8px] md:text-[10px] font-bold bg-slate-950 text-indigo-400 border border-indigo-500/30 px-1.5 py-0.5 rounded shadow-inner shrink-0">
+                {card.attribute}
+              </span>
+            </div>
 
           {/* Image Area with Level Badge */}
           <div className="w-full h-[150px] bg-slate-800 rounded-sm mb-3 flex items-center justify-center border border-slate-700/50 shadow-inner overflow-hidden relative shrink-0">
@@ -382,17 +401,35 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ onSave, initialCard })
             </div>
           )}
         </div>
-
-        <button 
-          onClick={() => onSave(card)}
-          className="w-[350px] py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-600/20"
-        >
-          <Save className="w-5 h-5" /> Save Card Definition
-        </button>
+        <div className="mt-6 w-full max-w-[350px] px-2">
+          <button 
+            onClick={() => onSave(card)}
+            className="w-full py-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-[0.98] text-white rounded-2xl font-bold flex items-center justify-center gap-3 transition-all shadow-lg shadow-emerald-900/20 border border-emerald-400/20"
+          >
+            <Save className="w-5 h-5" /> Save Card Definition
+          </button>
+        </div>
+            </>
+          ) : (
+            /* Collapsed Sidebar View (Vertical Bar) */
+            <button 
+              onClick={() => setIsSidebarCollapsed(false)}
+              className="group flex flex-col items-center gap-6 hover:bg-slate-900/50 p-4 rounded-2xl transition-all"
+            >
+              <ChevronRight className="w-5 h-5 text-indigo-400 group-hover:scale-125 transition-transform" />
+              <span className="[writing-mode:vertical-lr] rotate-180 text-[10px] font-black uppercase tracking-[0.3em] text-slate-500 group-hover:text-indigo-400 transition-colors">
+                Show Preview
+              </span>
+              <div className="w-10 h-14 border border-slate-800 rounded bg-slate-900/50 flex items-center justify-center opacity-40 group-hover:opacity-100 transition-opacity">
+                <Settings className="w-4 h-4 text-slate-600" />
+              </div>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Editor Form */}
-      <div className="lg:col-span-2 space-y-6">
+    {/* Right Column: Editor Form */}
+    <div className="flex-1 space-y-6">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="space-y-2 col-span-2">
@@ -489,10 +526,11 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ onSave, initialCard })
 
             <div className="space-y-4">
               {card.effects.map((effect, idx) => (
-                <div key={effect.id} className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-4 relative group">
+                <div key={effect.id} className="bg-slate-900/40 border border-slate-800 rounded-2xl p-4 md:p-6 space-y-6 relative group hover:border-indigo-500/30 transition-colors">
                   <button 
                     onClick={() => removeEffect(idx)}
-                    className="absolute top-4 right-4 text-slate-600 hover:text-red-400 transition-colors"
+                    className="absolute top-4 right-4 p-2 bg-slate-950 border border-slate-800 text-slate-500 hover:text-red-400 hover:border-red-500/50 rounded-lg transition-all shadow-xl z-10"
+                    title="Remove Effect"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -895,13 +933,14 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ onSave, initialCard })
                               </select>
                               <input 
                                 type="number"
-                                value={cost.params.n}
+                                value={cost.params.n ?? ""}
                                 onChange={e => {
                                   const newCosts = [...effect.costs];
-                                  newCosts[cIdx] = { ...cost, params: { ...cost.params, n: parseInt(e.target.value) || 0 } };
+                                  newCosts[cIdx] = { ...cost, params: { ...cost.params, n: e.target.value === "" ? undefined : parseInt(e.target.value) } };
                                   updateEffect(idx, { ...effect, costs: newCosts });
                                 }}
-                                className="w-12 bg-slate-950 border border-slate-800 rounded px-1 text-center text-[11px] text-indigo-400 font-bold"
+                                className="w-12 bg-slate-950 border border-slate-800 rounded px-1 text-center text-[11px] text-indigo-400 font-bold outline-none focus:border-indigo-500"
+                                placeholder="0"
                               />
                               <button 
                                 onClick={() => {
@@ -1024,13 +1063,14 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ onSave, initialCard })
                               </select>
                               <input 
                                 type="number"
-                                value={res.params.n}
+                                value={res.params.n ?? ""}
                                 onChange={e => {
                                   const newRes = [...effect.resolutions];
-                                  newRes[rIdx] = { ...res, params: { ...res.params, n: parseInt(e.target.value) || 0 } };
+                                  newRes[rIdx] = { ...res, params: { ...res.params, n: e.target.value === "" ? undefined : parseInt(e.target.value) } };
                                   updateEffect(idx, { ...effect, resolutions: newRes });
                                 }}
-                                className="w-12 bg-slate-950 border border-slate-800 rounded px-1 text-center text-[11px] text-emerald-400 font-bold"
+                                className="w-12 bg-slate-950 border border-slate-800 rounded px-1 text-center text-[11px] text-emerald-400 font-bold outline-none focus:border-emerald-500"
+                                placeholder="0"
                               />
                               <button 
                                 onClick={() => {
@@ -1123,9 +1163,12 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ onSave, initialCard })
                 </div>
               ))}
               {card.effects.length === 0 && (
-                <div className="h-32 flex flex-col items-center justify-center border-2 border-dashed border-slate-800 rounded-xl text-slate-600">
-                  <Plus className="w-8 h-8 mb-2 opacity-20" />
-                  <p className="text-xs uppercase tracking-widest font-bold">No Logic Branches Yet</p>
+                <div className="py-12 border-2 border-dashed border-slate-800 rounded-2xl flex flex-col items-center justify-center text-slate-600 bg-slate-900/20">
+                  <div className="w-16 h-16 rounded-full bg-slate-900 flex items-center justify-center mb-4">
+                    <Plus className="w-8 h-8 opacity-20" />
+                  </div>
+                  <p className="font-bold text-sm uppercase tracking-widest opacity-50">No logic branches yet</p>
+                  <p className="text-xs mt-2">Click "Add Branch" to start building your card's power.</p>
                 </div>
               )}
             </div>
