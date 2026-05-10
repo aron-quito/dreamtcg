@@ -28,7 +28,7 @@ const POS_MAP: Record<string, string> = {
 };
 
 const ATTR_MAP: Record<string, string> = {
-  "DARK": "OSCURIDAD", "LIGHT": "LUZ", "EARTH": "TIERRA", 
+  "DARK": "OSCURIDAD", "LIGHT": "LUZ", "EARTH": "TIERRA",
   "WATER": "AGUA", "FIRE": "FUEGO", "WIND": "VIENTO"
 };
 
@@ -97,7 +97,7 @@ export const renderTriggerText = (trigger: any) => {
       const from = params.sendFrom === "HAND" ? "desde la mano" : (params.sendFrom === "DECK" ? "desde el Deck" : (params.sendFrom === "FIELD" ? "desde el Campo" : ""));
       const method = params.sendMethod === "BATTLE" ? "por batalla" : (params.sendMethod === "EFFECT" ? "por efecto" : (params.sendMethod === "COST" ? "como costo" : ""));
       if (params.isSelf) return `Cuando esta carta es enviada al Cementerio ${from} ${method}`.replace(/\s+/g, ' ').trim();
-      
+
       const who = params.sendWho === "OPPONENT" ? "el oponente" : (params.sendWho === "ANY" ? "cualquier jugador" : "tú");
       const target = params.targetCardType === CardType.MONSTER ? "un monstruo" : "una carta";
       return `Cuando ${who} ${who === "tú" ? "envías" : "envía"} ${target}${params.filterName ? ` [${params.filterName}]` : ""} al Cementerio ${from} ${method}`.replace(/\s+/g, ' ').trim();
@@ -153,213 +153,290 @@ export const renderResolutionText = (res: any) => {
   }
 };
 
+// ─── CARD COMPONENT ─────────────────────────────────────────────────────────
+
 interface CardProps {
   card: CardDefinition;
   className?: string;
   isMiniature?: boolean;
   isUltraMiniature?: boolean;
+  isExpanded?: boolean; // kept for API compatibility, no longer drives special logic
   showStatus?: boolean;
 }
 
-export const Card: React.FC<CardProps> = ({ card, className = "", isMiniature = false, isUltraMiniature = false, showStatus = false }) => {
-  const containerRef = React.useRef<HTMLDivElement>(null);
+export const Card: React.FC<CardProps> = ({
+  card,
+  className = "",
+  isMiniature = false,
+  isUltraMiniature = false,
+  showStatus = false
+}) => {
+  const rootRef = React.useRef<HTMLDivElement>(null);
   const headerRef = React.useRef<HTMLHeadingElement>(null);
-  const [fontSize, setFontSize] = React.useState(10);
-  const [nameFontSize, setNameFontSize] = React.useState(isUltraMiniature ? 8 : 14);
+
+  // High-fidelity initialization: set realistic defaults to prevent the 'tiny card' start.
+  const [cardWidth, setCardWidth] = React.useState(
+    isUltraMiniature ? 90 : (isMiniature ? 130 : 350)
+  );
+
+  const [textScale, setTextScale] = React.useState(1);
+  const textRef = React.useRef<HTMLDivElement>(null);
 
   const isMonster = card.type === CardType.MONSTER;
   const attrStyle = ATTRIBUTE_STYLES[card.attribute || "DARK"];
 
+  // Single stable observer — measures real card width, zero loops.
   React.useLayoutEffect(() => {
-    const el = containerRef.current;
-    if (!el || !el.parentElement) return;
+    const el = rootRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.getBoundingClientRect().width;
+      if (w > 10) setCardWidth(w);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
-    const updateFontSize = () => {
-      const hEl = headerRef.current;
-      if (hEl && hEl.parentElement) {
-        const parentRect = el.parentElement!.getBoundingClientRect();
-        let nSize = isUltraMiniature ? 8 : (isMiniature ? 10 : Math.max(18, parentRect.height / 22));
-        hEl.style.fontSize = `${nSize}px`;
-        while (hEl.scrollWidth > hEl.parentElement.clientWidth && nSize > 8) {
-          nSize -= 0.5;
-          hEl.style.fontSize = `${nSize}px`;
-        }
-        setNameFontSize(nSize);
+  const fw = cardWidth; // alias
+  const fs = {
+    // Optimized ratios for grid-based layout
+    name: isUltraMiniature ? fw * 0.16 : (isMiniature ? fw * 0.13 : Math.min(fw * 0.088, 22)),
+    attr: isUltraMiniature ? 0 : (isMiniature ? fw * 0.07 : fw * 0.05),
+    label: fw * 0.036,
+    text: fw * 0.042,
+    desc: fw * 0.030,
+    footer: isMiniature ? fw * 0.10 : fw * 0.07,
+  };
+
+  // Synchronous header scaling to prevent text overflow
+  React.useLayoutEffect(() => {
+    const hEl = headerRef.current;
+    if (!hEl || !hEl.parentElement) return;
+    let n = isUltraMiniature ? fw * 0.16 : (isMiniature ? fw * 0.13 : fw * 0.088);
+    hEl.style.fontSize = `${n}px`;
+    while (hEl.scrollWidth > hEl.parentElement.clientWidth && n > 6) {
+      n -= 0.5;
+      hEl.style.fontSize = `${n}px`;
+    }
+  }, [cardWidth, card.name]);
+
+  // ─── EFFECT BOX SUB-COMPONENT ──────────────────────────────────────────────
+  // Each box manages its own local scale for perfect precision
+  const EffectBox: React.FC<{ 
+    eff: any; 
+    index: number; 
+    total: number;
+    baseFs: any;
+  }> = ({ eff, index, total, baseFs }) => {
+    const boxRef = React.useRef<HTMLDivElement>(null);
+    const contentRef = React.useRef<HTMLDivElement>(null);
+    const [localScale, setLocalScale] = React.useState(1);
+    
+    React.useLayoutEffect(() => {
+      const outer = boxRef.current;
+      const inner = contentRef.current;
+      if (!outer || !inner) return;
+      
+      // If inner content height is greater than outer container height, we must shrink
+      if (inner.scrollHeight > outer.clientHeight && localScale > 0.3) {
+        setLocalScale(prev => prev - 0.05);
       }
+    }, [localScale, eff, cardWidth]);
 
-      if (!isMiniature && !isUltraMiniature) {
-        const parentRect = el.parentElement!.getBoundingClientRect();
-        const availableHeight = parentRect.height - 24; 
-        if (availableHeight <= 0) return;
-
-        // More conservative scaling
-        let currentSize = Math.max(12, parentRect.height / 32); 
-        el.style.setProperty('--card-fs', `${currentSize}px`);
-        
-        let iterations = 0;
-        while (el.scrollHeight > availableHeight && currentSize > 7 && iterations < 100) {
-          currentSize -= 0.2;
-          el.style.setProperty('--card-fs', `${currentSize}px`);
-          iterations++;
-        }
-        setFontSize(currentSize);
-      }
+    const s = localScale;
+    const fsLocal = {
+      label: baseFs.label * s,
+      text:  baseFs.text * s,
     };
 
-    updateFontSize();
-    window.addEventListener('resize', updateFontSize);
-    return () => window.removeEventListener('resize', updateFontSize);
-  }, [card.effects, card.description, card.name, card.type, isMiniature, isUltraMiniature]);
+    const gridClass = total === 1 ? "col-span-2 row-span-2" : 
+                     (total === 2 ? "col-span-1 row-span-2" : 
+                     (total === 3 && index === 2 ? "col-span-2 row-span-1" : "col-span-1 row-span-1"));
+
+    return (
+      <div 
+        ref={boxRef}
+        className={`relative group transition-all bg-slate-950/20 hover:bg-slate-900/40 border border-white/5 rounded-md overflow-hidden flex ${gridClass}`}
+      >
+        {/* Left Side Dot Indicator Strip */}
+        <div 
+          className="bg-white/5 border-r border-white/5 flex flex-col items-center justify-center gap-[8%] shrink-0"
+          style={{ width: `${fw * 0.05}px` }}
+        >
+          {Array.from({ length: index + 1 }).map((_, i) => (
+            <div 
+              key={i} 
+              className="aspect-square bg-indigo-500/40 rounded-full shadow-[0_0_5px_rgba(99,102,241,0.5)] group-hover:bg-indigo-400 transition-colors" 
+              style={{ width: `${fw * 0.012}px` }}
+            />
+          ))}
+        </div>
+
+        {/* Content Area — Using a wrapper for precise measurement */}
+        <div className="flex-1 relative overflow-hidden">
+          <div 
+            ref={contentRef} 
+            className="absolute inset-0 flex flex-col justify-center p-[6%] gap-[3%] min-w-0"
+          >
+            <div className="text-slate-300 leading-tight" style={{ fontSize: `${fsLocal.text}px` }}>
+              <span className="text-indigo-400 font-bold uppercase tracking-tighter" style={{ fontSize: `${fsLocal.label}px` }}>Act: </span>
+              {renderTriggerText(eff.trigger)}
+            </div>
+            <div className="text-slate-300 leading-tight" style={{ fontSize: `${fsLocal.text}px` }}>
+              <span className="text-amber-500 font-bold uppercase tracking-tighter" style={{ fontSize: `${fsLocal.label}px` }}>Cnd: </span>
+              {renderRestrictionText(eff.restriction)}
+            </div>
+            {eff.costs.length > 0 && (
+              <div className="text-red-400/90 leading-tight" style={{ fontSize: `${fsLocal.text}px` }}>
+                <span className="text-red-500/80 font-bold uppercase tracking-tighter" style={{ fontSize: `${fsLocal.label}px` }}>Cst: </span>
+                {eff.costs.map((c: any) => renderCostText(c)).join(', ')}
+              </div>
+            )}
+            {eff.resolutions.length > 0 && (
+              <div className="text-emerald-400 leading-tight" style={{ fontSize: `${fsLocal.text}px` }}>
+                <span className="text-emerald-500 font-bold uppercase tracking-tighter" style={{ fontSize: `${fsLocal.label}px` }}>Res: </span>
+                {eff.resolutions.map((r: any) => renderResolutionText(r)).join(', ')}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div 
+    <div
+      ref={rootRef}
       className={`relative overflow-hidden flex flex-col aspect-[63/88] cursor-default transition-all duration-500 border-2 rounded-[3.5%] shadow-2xl ${className}
-        ${isMonster 
-          ? 'bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 border-slate-700/50' 
+        ${isMonster
+          ? 'bg-gradient-to-br from-slate-900 via-slate-900 to-slate-950 border-slate-700/50'
           : 'bg-gradient-to-br from-teal-950 via-slate-900 to-slate-950 border-teal-800/50'
         }`}
-      style={{ padding: (isMiniature || isUltraMiniature) ? '2%' : '4.2%' }}
+      style={{
+        padding: (isMiniature || isUltraMiniature) ? '2%' : '4.2%',
+        minWidth: isUltraMiniature ? '60px' : (isMiniature ? '100px' : '260px'),
+        minHeight: isUltraMiniature ? '84px' : (isMiniature ? '140px' : '363px')
+      }}
     >
+      {/* Top accent bar */}
       <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r 
-        ${isMonster ? 'from-amber-600 via-yellow-500 to-amber-600' : 'from-teal-500 via-emerald-400 to-teal-500'}`} 
+        ${isMonster ? 'from-amber-600 via-yellow-500 to-amber-600' : 'from-teal-500 via-emerald-400 to-teal-500'}`}
       />
-      
+
+      {/* Header: name + attribute */}
       <div className={`flex justify-between items-center ${isUltraMiniature ? 'mb-0' : (isMiniature ? 'mb-[1%]' : 'mb-[2%]')} relative z-10 shrink-0`}>
-        <h2 
+        <h2
           ref={headerRef}
-          className={`font-black uppercase tracking-tight truncate
-            ${isMonster ? 'text-white' : 'text-teal-50'}`}
-          style={{ fontSize: `${nameFontSize}px` }}
+          className={`font-black uppercase tracking-tight truncate ${isMonster ? 'text-white' : 'text-teal-50'}`}
+          style={{ fontSize: `${fs.name}px` }}
         >
           {card.name || "UNNAMED CARD"}
         </h2>
         {!isUltraMiniature && (
-          <div className={`px-1.5 py-0.5 border rounded-lg font-black uppercase transition-all duration-500 shrink-0
-            ${isMiniature ? 'text-[6px]' : 'text-[10px]'}
-            ${attrStyle.bg} ${attrStyle.text} ${attrStyle.border}`}>
+          <div
+            className={`px-1.5 py-0.5 border rounded-lg font-black uppercase shrink-0 ${attrStyle.bg} ${attrStyle.text} ${attrStyle.border}`}
+            style={{ fontSize: `${fs.attr}px` }}
+          >
             {isMiniature ? card.attribute?.slice(0, 3) : card.attribute}
           </div>
         )}
       </div>
 
+      {/* Art frame — Fixed Standard Proportion */}
       <div className={`w-full bg-slate-950 rounded-sm border border-slate-800/50 relative flex items-center justify-center overflow-hidden shrink-0 
         ${isUltraMiniature ? 'flex-1 mt-0' : (isMiniature ? 'flex-1 mt-1' : 'aspect-video mt-[2%]')}`}>
-         {card.image ? (
-           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-             <div 
-               className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
-               style={{ 
-                 height: `${(isUltraMiniature || isMiniature) ? 125 : 200}%`,
-                 aspectRatio: '600 / 450'
-               }}
-             >
-               <img 
-                 src={card.image} 
-                 alt={card.name} 
-                 className="w-full h-full object-contain transition-none" 
-                 style={{
-                   transform: (() => {
-                     const adj = isUltraMiniature 
-                       ? card.mini2Adjustments 
-                       : (isMiniature ? card.mini1Adjustments : card.mainAdjustments);
-                     return `translate(${adj?.x || 0}%, ${adj?.y || 0}%) scale(${adj?.zoom || 1})`;
-                   })(),
-                   transformOrigin: 'center center'
-                 }}
-               />
-             </div>
-           </div>
-         ) : (
-           <Package className={`${isUltraMiniature ? 'w-3 h-3' : (isMiniature ? 'w-4 h-4' : 'w-10 h-10')} text-slate-900 opacity-40`} />
-         )}
-         
-         {isMonster && !isUltraMiniature && (
-            <div className={`absolute top-1.5 right-1.5 aspect-square bg-gradient-to-br from-amber-300 via-yellow-500 to-amber-600 rounded-full border-2 border-amber-900/50 flex items-center justify-center shadow-[0_4px_10px_rgba(0,0,0,0.5),inset_0_1px_2px_rgba(255,255,255,0.6)] z-20
-              ${isMiniature ? 'w-5 h-5 text-[9px]' : 'w-9 h-9 text-base'}
-              text-black font-black`}
+        {card.image ? (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div
+              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+              style={{ height: `${(isUltraMiniature || isMiniature) ? 125 : 200}%`, aspectRatio: '600 / 450' }}
             >
-              {Math.max(1, card.level || 0)}
+              <img
+                src={card.image} alt={card.name}
+                className="w-full h-full object-contain"
+                style={{
+                  transform: (() => {
+                    const adj = isUltraMiniature ? card.mini2Adjustments : (isMiniature ? card.mini1Adjustments : card.mainAdjustments);
+                    return `translate(${adj?.x || 0}%, ${adj?.y || 0}%) scale(${adj?.zoom || 1})`;
+                  })(),
+                  transformOrigin: 'center center'
+                }}
+              />
             </div>
-          )}
+          </div>
+        ) : (
+          <Package className={`${isUltraMiniature ? 'w-3 h-3' : (isMiniature ? 'w-4 h-4' : 'w-10 h-10')} text-slate-900 opacity-40`} />
+        )}
+        {isMonster && !isUltraMiniature && (
+          <div className={`absolute top-1.5 right-1.5 aspect-square bg-gradient-to-br from-amber-300 via-yellow-500 to-amber-600 rounded-full border-2 border-amber-900/50 flex items-center justify-center shadow-[0_4px_10px_rgba(0,0,0,0.5),inset_0_1px_2px_rgba(255,255,255,0.6)] z-20 text-black font-black
+            ${isMiniature ? 'w-5 h-5 text-[9px]' : 'w-9 h-9 text-base'}`}
+          >
+            {Math.max(1, card.level || 0)}
+          </div>
+        )}
       </div>
 
+      {/* Text panel — CUBIC GRID SYSTEM */}
       {!isMiniature && !isUltraMiniature && (
-        <div className="mt-[4%] flex-1 bg-slate-950/40 rounded-sm p-3 border border-slate-800/50 overflow-hidden flex flex-col relative min-h-0">
-          <div 
-            ref={containerRef}
-            className="h-full w-full overflow-hidden pr-1"
-            style={{ 
-              fontSize: 'var(--card-fs, 10px)',
-              '--card-fs': `${fontSize}px` 
-            } as React.CSSProperties}
-          >
-            {card.description && (
-              <p className="text-slate-500 italic leading-tight mb-3 opacity-80" style={{ fontSize: 'calc(var(--card-fs) * 0.9)' }}>
-                {card.description}
-              </p>
-            )}
-            
-            <div className="space-y-4">
-              {card.effects.map((eff, i) => (
-                <div key={i} className="space-y-1.5 border-l border-indigo-500/30 pl-2">
-                  <div className="text-indigo-400 font-black uppercase tracking-wider" style={{ fontSize: 'calc(var(--card-fs) * 0.9)' }}>
-                    Efecto {i + 1}:
-                  </div>
-                  <div className="text-slate-300 leading-relaxed" style={{ fontSize: 'var(--card-fs)' }}>
-                    <span className="text-indigo-400 font-bold uppercase tracking-wider" style={{ fontSize: 'calc(var(--card-fs) * 0.8)' }}>Activación:</span> {renderTriggerText(eff.trigger)}
-                  </div>
-                  <div className="text-slate-300 leading-relaxed" style={{ fontSize: 'var(--card-fs)' }}>
-                    <span className="text-amber-500 font-bold uppercase tracking-wider" style={{ fontSize: 'calc(var(--card-fs) * 0.8)' }}>Condición:</span> {renderRestrictionText(eff.restriction)}
-                  </div>
-                  {eff.costs.length > 0 && (
-                    <div className="text-red-400/90 leading-relaxed" style={{ fontSize: 'var(--card-fs)' }}>
-                      <span className="text-red-500/80 font-bold uppercase tracking-wider" style={{ fontSize: 'calc(var(--card-fs) * 0.8)' }}>Costo:</span> {eff.costs.map(c => renderCostText(c)).join(', ')}
-                    </div>
-                  )}
-                  {eff.resolutions.length > 0 && (
-                    <div className="text-emerald-400 leading-relaxed" style={{ fontSize: 'var(--card-fs)' }}>
-                      <span className="text-emerald-500 font-bold uppercase tracking-wider" style={{ fontSize: 'calc(var(--card-fs) * 0.8)' }}>Resultado:</span> {eff.resolutions.map(r => renderResolutionText(r)).join(', ')}
-                    </div>
-                  )}
-                </div>
-              ))}
+        <div className="mt-[4%] flex-1 flex flex-col bg-transparent rounded-sm border border-white/5 overflow-hidden relative min-h-0 p-[4%]">
+          {card.description && (
+            <div className="px-[4%] mb-[3%] border-b border-white/5 pb-[2%] shrink-0">
+               <p className="text-slate-500 italic leading-tight opacity-80" style={{ fontSize: `${fs.desc}px` }}>
+                  {card.description}
+               </p>
             </div>
+          )}
+          
+          <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-[4%] min-h-0">
+            {card.effects.length > 0 ? (
+              card.effects.map((eff, i) => (
+                <EffectBox 
+                  key={i} 
+                  eff={eff} 
+                  index={i} 
+                  total={card.effects.length} 
+                  baseFs={fs} 
+                />
+              ))
+            ) : (
+              /* Phantom Lines for empty cards */
+              <div className="col-span-2 row-span-2 flex flex-col justify-center space-y-[8%] opacity-5 px-[10%]">
+                <div className="h-[2px] w-full bg-white/20 rounded-full" />
+                <div className="h-[2px] w-[90%] bg-white/20 rounded-full" />
+                <div className="h-[2px] w-[95%] bg-white/20 rounded-full" />
+                <div className="h-[2px] w-[40%] bg-white/20 rounded-full" />
+                <div className="h-[2px] w-[85%] bg-white/20 rounded-full" />
+              </div>
+            )}
           </div>
         </div>
       )}
 
+      {/* Footer: ATK / DEF / status */}
       {!isUltraMiniature && (
-        <div className={`flex justify-between items-center font-mono border-t border-slate-800/50 mt-auto pt-1 text-slate-300 shrink-0 relative
-          ${!isMonster ? 'justify-center' : ''}`}>
+        <div className={`flex items-center font-mono border-t border-slate-800/50 mt-auto pt-1 text-slate-300 shrink-0 ${isMonster ? 'justify-between' : 'justify-center'}`}>
           {isMonster && (
             <div className="flex items-center gap-1">
-              <span className="text-slate-500 font-bold text-[6px] uppercase">Atk</span>
-              <span className={`text-white font-black tracking-widest ${isMiniature ? 'text-[8px]' : 'text-sm'}`}>{card.atk ?? 0}</span>
+              <span className="text-slate-500 font-bold uppercase" style={{ fontSize: `calc(${fs.label} * 0.7)` }}>Atk</span>
+              <span className="text-white font-black tracking-widest" style={{ fontSize: `${fs.footer}px` }}>{card.atk ?? 0}</span>
             </div>
           )}
-          
           {showStatus && (
             <div className={`flex items-center gap-2 ${isMonster ? 'px-2' : ''}`}>
-              <div 
-                className={`w-1.5 h-1.5 rounded-full transition-all duration-500 ${
-                  card.isPublic 
-                    ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] ring-1 ring-emerald-400/20' 
-                    : 'bg-slate-700 border border-slate-500'
-                }`} 
+              <div className={`w-1.5 h-1.5 rounded-full transition-all duration-500 ${card.isPublic ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-slate-700 border border-slate-500'}`} />
+              <div className={`w-2 h-2 rounded-full shadow-[0_0_8px] ${card.limit === 0 ? 'bg-red-500 shadow-red-500/50' :
+                  card.limit === 1 ? 'bg-amber-500 shadow-amber-500/50' :
+                    card.limit === 2 ? 'bg-blue-500 shadow-blue-500/50' :
+                      'bg-emerald-500 shadow-emerald-500/50'}`}
               />
-              <div className={`w-2 h-2 rounded-full shadow-[0_0_8px] ${
-                card.limit === 0 ? 'bg-red-500 shadow-red-500/50' : 
-                card.limit === 1 ? 'bg-amber-500 shadow-amber-500/50' : 
-                card.limit === 2 ? 'bg-blue-500 shadow-blue-500/50' : 
-                'bg-emerald-500 shadow-emerald-500/50'
-              }`} />
             </div>
           )}
-
           {isMonster && (
             <div className="flex items-center gap-1">
-              <span className="text-slate-500 font-bold text-[6px] uppercase">Def</span>
-              <span className={`text-white font-black tracking-widest ${isMiniature ? 'text-[8px]' : 'text-sm'}`}>{card.def ?? 0}</span>
+              <span className="text-slate-500 font-bold uppercase" style={{ fontSize: `calc(${fs.label} * 0.7)` }}>Def</span>
+              <span className="text-white font-black tracking-widest" style={{ fontSize: `${fs.footer}px` }}>{card.def ?? 0}</span>
             </div>
           )}
         </div>

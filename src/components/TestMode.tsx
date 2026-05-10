@@ -401,7 +401,7 @@ export const TestMode: React.FC<TestModeProps> = ({ cards, decks }) => {
                    onClick={() => setIsCardPopupOpen(true)}
                  >
                    <div className="w-full h-full flex items-center justify-center">
-                     <Card card={inspectedCard} className="shadow-[0_40px_100px_rgba(0,0,0,0.9)]" />
+                     <Card card={inspectedCard} className="h-full shadow-[0_40px_100px_rgba(0,0,0,0.9)]" />
                    </div>
                 </div>
               </div>
@@ -540,48 +540,48 @@ export const TestMode: React.FC<TestModeProps> = ({ cards, decks }) => {
             onClick={() => setIsCardPopupOpen(false)}
           >
             <motion.div 
-              initial={{ scale: 0.95, y: 30 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.95, y: 30 }}
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
               onClick={e => e.stopPropagation()}
-              className="bg-slate-900 border border-white/10 rounded-[3.5rem] w-full max-w-[90vw] h-[85vh] flex gap-12 relative shadow-[0_50px_200px_rgba(0,0,0,1)] p-12 overflow-hidden"
+              className="bg-slate-900 border-2 border-white/10 rounded-[4rem] w-[96vw] h-[92vh] flex overflow-hidden shadow-[0_0_150px_rgba(0,0,0,1)] relative z-[300]"
             >
               <button 
                 onClick={() => setIsCardPopupOpen(false)} 
-                className="absolute top-8 right-8 p-3 bg-white/5 hover:bg-white/10 rounded-2xl text-white transition-all z-50 border border-white/10"
+                className="absolute top-10 right-10 p-5 bg-white/10 hover:bg-white/20 rounded-3xl text-white transition-all z-[310] border border-white/20 group"
               >
-                <X className="w-6 h-6" />
+                <X className="w-10 h-10 group-hover:rotate-90 transition-transform duration-500" />
               </button>
 
-              {/* LEFT: CARD PREVIEW */}
-              <div className="w-[35%] flex items-center justify-center h-full">
-                 <div className="h-full aspect-[63/88]">
-                   <Card card={inspectedCard} className="h-full w-full" />
+              {/* LEFT: CARD PREVIEW (Explicit large scale) */}
+              <div className="w-[550px] shrink-0 h-full p-20 flex items-center justify-center bg-black/40 border-r-2 border-white/10">
+                 <div className="h-full w-full flex items-center justify-center overflow-hidden">
+                   <Card card={inspectedCard} className="h-full w-auto aspect-[63/88] shadow-[0_0_120px_rgba(0,0,0,0.9)]" />
                  </div>
               </div>
 
-              {/* RIGHT: CONTENT */}
-              <div className="flex-1 flex flex-col gap-6 h-full overflow-hidden">
-                 <div className="space-y-4 shrink-0">
-                    <h2 className="text-5xl font-black text-white uppercase tracking-tighter leading-none">{inspectedCard.name}</h2>
-                    <div className="flex flex-wrap items-center gap-3">
-                       <div className="px-4 py-1.5 bg-indigo-600/20 border border-indigo-400/20 rounded-xl flex items-center gap-3">
-                          <Dna className="w-4 h-4 text-indigo-400" />
-                          <span className="text-xs font-black text-indigo-200 uppercase tracking-widest">{inspectedCard.type}</span>
+              {/* RIGHT: CONTENT (Data Rich) */}
+              <div className="flex-1 flex flex-col p-20 gap-10 overflow-hidden bg-gradient-to-br from-slate-900 to-slate-950">
+                 <div className="space-y-8 shrink-0">
+                    <h2 className="text-8xl font-black text-white uppercase tracking-tighter leading-none">{inspectedCard.name}</h2>
+                    <div className="flex flex-wrap items-center gap-5">
+                       <div className="px-8 py-3 bg-indigo-500/20 border border-indigo-400/30 rounded-2xl flex items-center gap-4">
+                          <Dna className="w-8 h-8 text-indigo-400" />
+                          <span className="text-lg font-black text-indigo-100 uppercase tracking-widest">{inspectedCard.type}</span>
                        </div>
                        {inspectedCard.type === CardType.MONSTER && (
                          <>
-                           <div className="flex items-center gap-3 px-4 py-1.5 bg-amber-600/20 border border-amber-400/20 rounded-xl">
-                              <Zap className="w-4 h-4 text-amber-400" />
-                              <span className="text-xs font-black text-amber-200 uppercase tracking-widest">LVL {inspectedCard.level || 1}</span>
+                           <div className="flex items-center gap-4 px-8 py-3 bg-amber-500/20 border border-amber-400/30 rounded-2xl">
+                              <Zap className="w-8 h-8 text-amber-400" />
+                              <span className="text-lg font-black text-amber-100 uppercase tracking-widest">LVL {inspectedCard.level || 1}</span>
                            </div>
-                           <div className="flex items-center gap-3 px-4 py-1.5 bg-rose-600/20 border border-rose-400/20 rounded-xl">
-                              <Sword className="w-4 h-4 text-rose-400" />
-                              <span className="text-xs font-black text-rose-200 uppercase tracking-widest">ATK {inspectedCard.atk ?? 0}</span>
+                           <div className="flex items-center gap-4 px-8 py-3 bg-rose-500/20 border border-rose-400/30 rounded-2xl">
+                              <Sword className="w-8 h-8 text-rose-400" />
+                              <span className="text-lg font-black text-rose-100 uppercase tracking-widest">ATK {inspectedCard.atk ?? 0}</span>
                            </div>
-                           <div className="flex items-center gap-3 px-4 py-1.5 bg-blue-600/20 border border-blue-400/20 rounded-xl">
-                              <Shield className="w-4 h-4 text-blue-400" />
-                              <span className="text-xs font-black text-blue-200 uppercase tracking-widest">DEF {inspectedCard.def ?? 0}</span>
+                           <div className="flex items-center gap-4 px-8 py-3 bg-blue-500/20 border border-blue-400/30 rounded-2xl">
+                              <Shield className="w-8 h-8 text-blue-400" />
+                              <span className="text-lg font-black text-blue-100 uppercase tracking-widest">DEF {inspectedCard.def ?? 0}</span>
                            </div>
                          </>
                        )}
@@ -589,42 +589,53 @@ export const TestMode: React.FC<TestModeProps> = ({ cards, decks }) => {
                  </div>
 
                  {/* TEXT AREA (Clean & Standard) */}
-                 <div className="flex-1 bg-slate-950/40 rounded-[2.5rem] border border-white/5 p-8 overflow-hidden flex flex-col shadow-inner">
-                    <div className="flex-1 overflow-y-auto pr-6 custom-scrollbar space-y-8">
+                 <div className="flex-1 bg-black/50 rounded-[4rem] border border-white/10 p-16 overflow-hidden flex flex-col shadow-[inset_0_4px_40px_rgba(0,0,0,0.5)]">
+                    <div className="flex-1 overflow-y-auto pr-10 custom-scrollbar space-y-12">
                        {inspectedCard.description && (
-                         <p className="text-lg italic font-serif text-slate-500 border-b border-white/5 pb-6 leading-relaxed">
+                         <p className="text-3xl italic font-serif text-slate-400 border-b border-white/10 pb-10 leading-relaxed">
                            {inspectedCard.description}
                          </p>
                        )}
 
-                       <div className="space-y-10 pb-8">
-                         {inspectedCard.effects.map((eff, i) => (
-                           <div key={i} className="space-y-5 border-l-2 border-indigo-500/20 pl-6">
-                              <div className="space-y-4">
-                                <div className="space-y-1">
-                                  <span className="text-indigo-400 font-black text-[9px] uppercase tracking-widest">Activación:</span>
-                                  <p className="text-xl text-white font-bold">{renderTriggerText(eff.trigger)}</p>
-                                </div>
-                                <div className="space-y-1">
-                                  <span className="text-amber-500 font-black text-[9px] uppercase tracking-widest">Condición:</span>
-                                  <p className="text-base text-slate-400">{renderRestrictionText(eff.restriction)}</p>
-                                </div>
-                                <div className="space-y-1">
-                                  <span className="text-emerald-500 font-black text-[9px] uppercase tracking-widest">Resultado:</span>
+                       <div className="space-y-16 pb-16">
+                         {inspectedCard.effects.length === 0 ? (
+                           <div className="h-full flex flex-col items-center justify-center text-slate-800 opacity-30 py-32 space-y-8">
+                             <div className="w-full max-w-md space-y-4">
+                                <div className="h-2 bg-white/5 rounded-full w-full" />
+                                <div className="h-2 bg-white/5 rounded-full w-3/4 mx-auto" />
+                                <div className="h-2 bg-white/5 rounded-full w-5/6 mx-auto" />
+                             </div>
+                             <span className="text-sm font-black uppercase tracking-[0.5em]">Sin Efectos Adicionales</span>
+                           </div>
+                         ) : (
+                           inspectedCard.effects.map((eff, i) => (
+                             <div key={i} className="space-y-8 border-l-8 border-indigo-500/20 pl-12">
+                                <div className="space-y-8">
                                   <div className="space-y-3">
-                                    {eff.costs.length > 0 && (
-                                      <p className="text-rose-400 text-sm font-bold bg-rose-500/5 p-2 rounded-lg inline-block">
-                                        Costo: {eff.costs.map(c => renderCostText(c)).join(", ")}
+                                    <span className="text-indigo-400 font-black text-sm uppercase tracking-[0.4em]">Activación:</span>
+                                    <p className="text-4xl text-white font-bold leading-tight">{renderTriggerText(eff.trigger)}</p>
+                                  </div>
+                                  <div className="space-y-3">
+                                    <span className="text-amber-500 font-black text-sm uppercase tracking-[0.4em]">Condición:</span>
+                                    <p className="text-2xl text-slate-400 leading-relaxed">{renderRestrictionText(eff.restriction)}</p>
+                                  </div>
+                                  <div className="space-y-3">
+                                    <span className="text-emerald-500 font-black text-sm uppercase tracking-[0.4em]">Resultado:</span>
+                                    <div className="space-y-6">
+                                      {eff.costs.length > 0 && (
+                                        <p className="text-rose-400 text-xl font-bold bg-rose-500/10 px-6 py-3 rounded-2xl inline-block border border-rose-500/20">
+                                          Costo: {eff.costs.map(c => renderCostText(c)).join(", ")}
+                                        </p>
+                                      )}
+                                      <p className="text-4xl text-emerald-400 font-black leading-snug">
+                                        {eff.resolutions.map(r => renderResolutionText(r)).join(", ")}
                                       </p>
-                                    )}
-                                    <p className="text-xl text-emerald-400 font-black">
-                                      {eff.resolutions.map(r => renderResolutionText(r)).join(", ")}
-                                    </p>
+                                    </div>
                                   </div>
                                 </div>
-                              </div>
-                           </div>
-                         ))}
+                             </div>
+                           ))
+                         )}
                        </div>
                     </div>
                  </div>
