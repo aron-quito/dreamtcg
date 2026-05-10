@@ -204,15 +204,17 @@ const TriggerParamsEditor = ({ trigger, onChange }: { trigger: Trigger, onChange
           {renderInput('Filter Name', 'filterName')}
         </div>
       );
-    case TriggerType.ON_SUMMON:
+    case TriggerType.ON_SUMMON: {
+      const isSelf = params.summonWho === 'SELF';
       return (
         <div className="flex gap-3 mt-3 flex-wrap bg-slate-950/40 p-3 rounded-xl border border-slate-800/50">
-          {renderSelect('Who Summons', 'summonWho', ['ANY', 'YOU', 'OPPONENT'], 'ANY')}
+          {renderSelect('Who Summons', 'summonWho', ['ANY', 'SELF', 'YOU', 'OPPONENT'], 'ANY')}
           {renderSelect('Method', 'summonMethod', ['ANY', 'NORMAL', 'SPECIAL', 'FLIP'], 'ANY')}
-          {renderSelect('Card Type', 'targetCardType', ['ANY', 'MONSTER', 'SPELL'], 'MONSTER')}
-          {renderInput('Filter Name', 'filterName')}
+          {!isSelf && renderSelect('Card Type', 'targetCardType', ['ANY', 'MONSTER', 'SPELL'], 'MONSTER')}
+          {!isSelf && renderInput('Filter Name', 'filterName')}
         </div>
       );
+    }
     case TriggerType.ON_DRAW:
       return (
         <div className="flex gap-3 mt-3 flex-wrap bg-slate-950/40 p-3 rounded-xl border border-slate-800/50">

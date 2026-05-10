@@ -23,8 +23,7 @@ import {
   FrequencyType, 
   CardLocation,
   CardDefinition,
-  DeckDefinition,
-  GameState
+  DeckDefinition
 } from './types';
 import { ConfirmModal } from './components/ConfirmModal';
 
@@ -74,15 +73,7 @@ const INITIAL_COLLECTION: CardDefinition[] = [
   }
 ];
 
-const INITIAL_GAME_STATE: GameState = {
-  players: [
-    { id: 'p1', name: 'Player 1', lp: 8000, deck: [], hand: [], monsterZones: [null, null, null], spellZones: [null, null, null], gy: [], extraDeck: [] },
-    { id: 'p2', name: 'Player 2', lp: 8000, deck: [], hand: [], monsterZones: [null, null, null], spellZones: [null, null, null], gy: [], extraDeck: [] }
-  ],
-  turn: 1,
-  activePlayerIndex: 0,
-  chain: []
-};
+
 
 type Module = 'BUILDER' | 'DECK' | 'TEST';
 
@@ -368,8 +359,8 @@ export default function App() {
           )}
           {activeModule === 'TEST' && (
             <TestMode 
-              initialState={INITIAL_GAME_STATE} 
-              cards={collection} 
+              cards={collection}
+              decks={decks}
             />
           )}
         </section>

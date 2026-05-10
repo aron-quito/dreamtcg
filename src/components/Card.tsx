@@ -58,7 +58,7 @@ const renderFilterText = (filter: any, n: number) => {
   return `${targetStr}${n > 1 ? "s" : ""} ${details.join(" ")}`.trim();
 };
 
-const renderTriggerText = (trigger: any) => {
+export const renderTriggerText = (trigger: any) => {
   const params = trigger.params || {};
   switch (trigger.type) {
     case TriggerType.ANY_TIME: return "Cualquier momento (Efecto Rápido)";
@@ -69,10 +69,11 @@ const renderTriggerText = (trigger: any) => {
       return `Cuando ${who} activa${who === "tú" ? "s" : ""} ${target}${name}`;
     }
     case TriggerType.ON_SUMMON: {
-      const who = params.summonWho === "OPPONENT" ? "el oponente" : (params.summonWho === "ANY" ? "cualquier jugador" : "tú");
       const method = params.summonMethod === "SPECIAL" ? "de Modo Especial" : (params.summonMethod === "NORMAL" ? "de Modo Normal" : (params.summonMethod === "FLIP" ? "por Volteo" : ""));
-      const target = params.targetCardType === CardType.MONSTER ? "un monstruo" : "una carta";
       const name = params.filterName ? ` [${params.filterName}]` : "";
+      if (params.summonWho === "SELF") return `Cuando esta carta es Invocada ${method}`.replace(/\s+/g, ' ').trim();
+      const who = params.summonWho === "OPPONENT" ? "el oponente" : (params.summonWho === "ANY" ? "cualquier jugador" : "tú");
+      const target = params.targetCardType === CardType.MONSTER ? "un monstruo" : "una carta";
       if (params.summonWho === "ANY") return `Al ser Invocad${target === "un monstruo" ? "o" : "a"} ${method} ${target} ${name}`;
       return `Cuando ${who} Invoca${who === "tú" ? "s" : ""} ${method} ${target} ${name}`;
     }
@@ -105,7 +106,7 @@ const renderTriggerText = (trigger: any) => {
   }
 };
 
-const renderRestrictionText = (restr: any) => {
+export const renderRestrictionText = (restr: any) => {
   if (!restr) return '';
   const locs = restr.locations.map((l: any) => LOC_MAP[l] || l).join(", ");
   const freq = FREQ_MAP[restr.frequency] || restr.frequency;
@@ -122,7 +123,7 @@ const renderRestrictionText = (restr: any) => {
   return base;
 };
 
-const renderCostText = (cost: any) => {
+export const renderCostText = (cost: any) => {
   const n = cost.params.n || 1;
   const filterText = renderFilterText(cost.params.filter, n);
   switch (cost.action) {
@@ -137,7 +138,7 @@ const renderCostText = (cost: any) => {
   }
 };
 
-const renderResolutionText = (res: any) => {
+export const renderResolutionText = (res: any) => {
   const n = res.params.n || 1;
   const filterText = renderFilterText(res.params.filter, n);
   switch (res.action) {
@@ -176,9 +177,10 @@ export const Card: React.FC<CardProps> = ({ card, className = "", isMiniature = 
     const updateFontSize = () => {
       const hEl = headerRef.current;
       if (hEl && hEl.parentElement) {
-        let nSize = isUltraMiniature ? 8 : (isMiniature ? 10 : 14);
+        const parentRect = el.parentElement!.getBoundingClientRect();
+        let nSize = isUltraMiniature ? 8 : (isMiniature ? 10 : Math.max(18, parentRect.height / 22));
         hEl.style.fontSize = `${nSize}px`;
-        while (hEl.scrollWidth > hEl.parentElement.clientWidth && nSize > 6) {
+        while (hEl.scrollWidth > hEl.parentElement.clientWidth && nSize > 8) {
           nSize -= 0.5;
           hEl.style.fontSize = `${nSize}px`;
         }
@@ -190,10 +192,12 @@ export const Card: React.FC<CardProps> = ({ card, className = "", isMiniature = 
         const availableHeight = parentRect.height - 24; 
         if (availableHeight <= 0) return;
 
-        let currentSize = 10;
+        // More conservative scaling
+        let currentSize = Math.max(12, parentRect.height / 32); 
         el.style.setProperty('--card-fs', `${currentSize}px`);
+        
         let iterations = 0;
-        while (el.scrollHeight > availableHeight && currentSize > 3 && iterations < 50) {
+        while (el.scrollHeight > availableHeight && currentSize > 7 && iterations < 100) {
           currentSize -= 0.2;
           el.style.setProperty('--card-fs', `${currentSize}px`);
           iterations++;
@@ -223,7 +227,7 @@ export const Card: React.FC<CardProps> = ({ card, className = "", isMiniature = 
       <div className={`flex justify-between items-center ${isUltraMiniature ? 'mb-0' : (isMiniature ? 'mb-[1%]' : 'mb-[2%]')} relative z-10 shrink-0`}>
         <h2 
           ref={headerRef}
-          className={`font-black uppercase italic tracking-tighter truncate
+          className={`font-black uppercase tracking-tight truncate
             ${isMonster ? 'text-white' : 'text-teal-50'}`}
           style={{ fontSize: `${nameFontSize}px` }}
         >
