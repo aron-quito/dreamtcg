@@ -22,6 +22,57 @@ import {
 } from '../types';
 import { EffectRegistry } from '../engine/registry';
 
+const useDynamicFontSize = (card: any) => {
+  const [fontSize, setFontSize] = React.useState(10);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  // Reset font size when ANY part of the card changes, then we shrink if needed
+  React.useEffect(() => {
+    setFontSize(10);
+  }, [card.name, card.description, card.effects, card.type]);
+
+  React.useLayoutEffect(() => {
+    const checkOverflow = () => {
+      const el = containerRef.current;
+      if (!el) return;
+
+      // We use a small buffer (+1) to avoid flickering
+      const isOverflowing = el.scrollHeight > el.clientHeight + 1;
+      
+      if (isOverflowing && fontSize > 4) {
+        // Decrease font size iteratively until it fits
+        setFontSize(f => f - 0.2);
+      }
+    };
+
+    // Delay slightly to ensure browser has painted
+    const timeoutId = setTimeout(checkOverflow, 10);
+    return () => clearTimeout(timeoutId);
+  }, [card, fontSize]);
+
+  return { fontSize, containerRef };
+};
+
+const COST_OPTIONS = [
+  { value: "DISCARD", label: "Discard Card(s)", params: ["n"] },
+  { value: "DESTROY_OWN", label: "Destroy Own Card(s)", params: ["n"] },
+  { value: "PAY_LP", label: "Pay Life Points", params: ["n"] },
+  { value: "BANISH_OWN", label: "Banish Own Card(s)", params: ["n"] },
+  { value: "SEND_TO_GY", label: "Send to GY", params: ["n"] },
+  { value: "TRIBUTE", label: "Tribute Monster(s)", params: ["n"] },
+  { value: "REVEAL_HAND", label: "Reveal Hand Card(s)", params: ["n"] },
+];
+
+const RESOLUTION_OPTIONS = [
+  { value: "DRAW", label: "Draw Card(s)", params: ["n"] },
+  { value: "DESTROY_ENEMY", label: "Destroy Enemy Card(s)", params: ["n"] },
+  { value: "ADD_TO_HAND", label: "Add from Deck to Hand", params: ["n"] },
+  { value: "DEAL_DAMAGE", label: "Deal Effect Damage", params: ["n"] },
+  { value: "HEAL_LP", label: "Heal Life Points", params: ["n"] },
+  { value: "SUMMON_FROM_DECK", label: "Summon from Deck", params: ["n"] },
+  { value: "BANISH_ENEMY", label: "Banish Enemy Card(s)", params: ["n"] },
+];
+
 const renderRestrictionText = (restriction: Restriction): string => {
   const locMap: Record<string, string> = {
     [CardLocation.HAND]: "la Mano",
@@ -124,6 +175,76 @@ const renderTriggerText = (trigger: Trigger): string => {
   }
 };
 
+const renderCostText = (cost: any): string => {
+  const n = cost.params.n || 1;
+  const filter = cost.params.filter || {};
+  
+  const attrMap: Record<string, string> = {
+    "DARK": "OSCURIDAD", "LIGHT": "LUZ", "EARTH": "TIERRA", 
+    "WATER": "AGUA", "FIRE": "FUEGO", "WIND": "VIENTO"
+  };
+
+  let targetStr = "carta";
+  if (filter.targetType === "MONSTER") targetStr = "monstruo";
+  if (filter.targetType === "SPELL") targetStr = "carta de Hechizo";
+
+  const details = [];
+  if (filter.cardName) details.push(`"${filter.cardName}"`);
+  if (filter.attribute && filter.attribute !== "ANY") details.push(`de ${attrMap[filter.attribute] || filter.attribute}`);
+  if (filter.minAtk) details.push(`con ${filter.minAtk}+ ATK`);
+  if (filter.maxAtk) details.push(`con ${filter.maxAtk}- ATK`);
+  if (filter.minLevel) details.push(`de Nivel ${filter.minLevel}+`);
+  if (filter.maxLevel) details.push(`de Nivel ${filter.maxLevel}-`);
+
+  const fullTarget = `${targetStr}${n > 1 ? "s" : ""} ${details.join(" ")}`.trim();
+
+  switch (cost.action) {
+    case "DISCARD": return `Descarta ${n} ${fullTarget}`;
+    case "DESTROY_OWN": return `Destruye ${n} ${fullTarget} que controles`;
+    case "PAY_LP": return `Paga ${n} LP`;
+    case "BANISH_OWN": return `Destierra ${n} ${fullTarget} de tu posesión`;
+    case "SEND_TO_GY": return `Envía ${n} ${fullTarget} al Cementerio`;
+    case "TRIBUTE": return `Sacrifica ${n} ${fullTarget}`;
+    case "REVEAL_HAND": return `Revela ${n} ${fullTarget} en tu mano`;
+    default: return `${cost.action}(${n})`;
+  }
+};
+
+const renderResolutionText = (res: any): string => {
+  const n = res.params.n || 1;
+  const filter = res.params.filter || {};
+  
+  const attrMap: Record<string, string> = {
+    "DARK": "OSCURIDAD", "LIGHT": "LUZ", "EARTH": "TIERRA", 
+    "WATER": "AGUA", "FIRE": "FUEGO", "WIND": "VIENTO"
+  };
+
+  let targetStr = "carta";
+  if (filter.targetType === "MONSTER") targetStr = "monstruo";
+  if (filter.targetType === "SPELL") targetStr = "carta de Hechizo";
+
+  const details = [];
+  if (filter.cardName) details.push(`"${filter.cardName}"`);
+  if (filter.attribute && filter.attribute !== "ANY") details.push(`de ${attrMap[filter.attribute] || filter.attribute}`);
+  if (filter.minAtk) details.push(`con ${filter.minAtk}+ ATK`);
+  if (filter.maxAtk) details.push(`con ${filter.maxAtk}- ATK`);
+  if (filter.minLevel) details.push(`de Nivel ${filter.minLevel}+`);
+  if (filter.maxLevel) details.push(`de Nivel ${filter.maxLevel}-`);
+
+  const fullTarget = `${targetStr}${n > 1 ? "s" : ""} ${details.join(" ")}`.trim();
+
+  switch (res.action) {
+    case "DRAW": return `Roba ${n} carta${n > 1 ? "s" : ""}`;
+    case "DESTROY_ENEMY": return `Destruye ${n} ${fullTarget} del oponente`;
+    case "ADD_TO_HAND": return `Añade ${n} ${fullTarget} del Deck a tu mano`;
+    case "DEAL_DAMAGE": return `Inflige ${n} puntos de daño al oponente`;
+    case "HEAL_LP": return `Recupera ${n} LP`;
+    case "SUMMON_FROM_DECK": return `Invoca ${n} ${fullTarget} desde el Deck`;
+    case "BANISH_ENEMY": return `Destierra ${n} ${fullTarget} del oponente`;
+    default: return `${res.action}(${n})`;
+  }
+};
+
 interface CardBuilderProps {
   onSave: (card: CardDefinition) => void;
   initialCard?: CardDefinition;
@@ -132,13 +253,13 @@ interface CardBuilderProps {
 export const CardBuilder: React.FC<CardBuilderProps> = ({ onSave, initialCard }) => {
   const [card, setCard] = useState<CardDefinition>(initialCard || {
     id: crypto.randomUUID(),
-    name: "New Card",
+    name: "",
     type: CardType.MONSTER,
-    description: "Enter description...",
+    description: "",
     effects: [],
-    level: 1,
-    atk: 0,
-    def: 0,
+    level: undefined,
+    atk: undefined,
+    def: undefined,
     attribute: CardAttribute.DARK,
     isCustom: true
   });
@@ -165,55 +286,116 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ onSave, initialCard })
     setCard({ ...card, effects: card.effects.filter((_, i) => i !== index) });
   };
 
+  const { fontSize: effectFontSize, containerRef: effectsContainerRef } = useDynamicFontSize(card);
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 p-4">
       {/* Visual Preview */}
-      <div className="space-y-4">
-        <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Card Preview</h3>
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
+      <div className="space-y-4 flex flex-col items-center">
+        <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Card Preview (Scale 1.5x)</h3>
+        
+        {/* Card Container with fixed aspect ratio 63:88 and expanded size */}
+        <div 
+          className="bg-slate-900 border border-slate-800 rounded-[3%] shadow-2xl relative overflow-hidden flex flex-col"
+          style={{ width: '350px', height: '488px', padding: '15px' }}
+        >
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 to-purple-500" />
-          <div className="flex justify-between items-start mb-4">
-            <h4 className="text-xl font-bold uppercase tracking-tight">{card.name || "Unnamed"}</h4>
-            <span className="text-[10px] font-mono bg-slate-800 px-2 py-1 rounded">{card.attribute}</span>
+          
+          {/* Header */}
+          <div className="flex justify-between items-center mb-1">
+            <h4 className="text-lg font-black uppercase tracking-tighter text-white truncate max-w-[80%] drop-shadow-md">
+              {card.name || "Unnamed Card"}
+            </h4>
+            <span className="text-[10px] font-bold bg-slate-800 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded shadow-inner shrink-0">
+              {card.attribute}
+            </span>
           </div>
-          <div className="aspect-[3/4] bg-slate-800 rounded-lg mb-4 flex items-center justify-center border border-slate-700/30">
-            <Settings className="w-12 h-12 text-slate-700 animate-spin-slow" />
-          </div>
-          <div className="text-[11px] text-slate-400 italic mb-4 min-h-[4rem] space-y-3">
-            <p className="leading-relaxed">{card.description || "Sin descripción establecida..."}</p>
-            {card.effects.map((eff, i) => (
-              <div key={i} className="pt-2 border-t border-slate-800/50 space-y-1 not-italic">
-                <div className="flex gap-2">
-                  <span className="text-indigo-400 font-bold shrink-0">Trigger:</span>
-                  <span className="text-slate-200 leading-tight">{renderTriggerText(eff.trigger)}</span>
-                </div>
-                <div className="flex gap-2">
-                  <span className="text-amber-500 font-bold shrink-0">Condition:</span>
-                  <span className="text-slate-200 leading-tight">{renderRestrictionText(eff.restriction)}</span>
+
+          {/* Image Area with Level Badge */}
+          <div className="w-full h-[150px] bg-slate-800 rounded-sm mb-3 flex items-center justify-center border border-slate-700/50 shadow-inner overflow-hidden relative shrink-0">
+            <div className="absolute inset-0 bg-gradient-to-b from-transparent to-slate-950/20" />
+            <Settings className="w-12 h-12 text-slate-700 opacity-20" />
+            
+            {/* New Level Badge - Single Circle with Number */}
+            {card.type === CardType.MONSTER && (
+              <div className="absolute top-2 right-2 flex items-center justify-center">
+                <div className="w-8 h-8 bg-gradient-to-tr from-amber-600 via-yellow-400 to-amber-200 rounded-full border-2 border-amber-900 shadow-lg flex items-center justify-center transform hover:scale-110 transition-transform">
+                  <span className="text-black font-black text-sm drop-shadow-sm">{card.level || 1}</span>
                 </div>
               </div>
-            ))}
+            )}
           </div>
+
+          {/* Description & Effects Area with Dynamic Shrink */}
+          <div className="flex-1 bg-slate-950/40 rounded-sm p-3 border border-slate-800/50 shadow-inner overflow-hidden flex flex-col">
+            <p className="text-[9px] text-slate-500 italic leading-tight border-b border-slate-800/50 pb-2 mb-2">
+              {card.description || "Enter card lore..."}
+            </p>
+            
+            {/* Dynamic Effects List with Ref for Shrinking */}
+            <div 
+              ref={effectsContainerRef}
+              className="flex-1 space-y-2 overflow-hidden scrollbar-hide" 
+              style={{ fontSize: `${effectFontSize}px` }}
+            >
+              {card.effects.map((eff, i) => (
+                <div key={i} className="space-y-1 animate-in fade-in slide-in-from-bottom-1 border-b border-slate-800/30 last:border-0 pb-2">
+                  <div className="text-indigo-400 font-black uppercase tracking-tighter" style={{ fontSize: `${effectFontSize + 1}px` }}>
+                    EFECTO {i + 1}:
+                  </div>
+                  <div className="flex gap-2 items-baseline">
+                    <span className="text-slate-500 font-bold uppercase shrink-0" style={{ fontSize: `${effectFontSize - 2}px` }}>Trigger:</span>
+                    <span className="text-slate-200 leading-[1.2]">{renderTriggerText(eff.trigger)}</span>
+                  </div>
+                  <div className="flex gap-2 items-baseline">
+                    <span className="text-amber-500/80 font-bold uppercase shrink-0" style={{ fontSize: `${effectFontSize - 2}px` }}>Condition:</span>
+                    <span className="text-slate-300 leading-[1.2]">{renderRestrictionText(eff.restriction)}</span>
+                  </div>
+                  {eff.costs.length > 0 && (
+                    <div className="flex gap-2 items-baseline">
+                      <span className="text-red-500/80 font-bold uppercase shrink-0" style={{ fontSize: `${effectFontSize - 2}px` }}>Cost:</span>
+                      <span className="text-red-100 leading-[1.2]">{eff.costs.map(c => renderCostText(c)).join(", ")}</span>
+                    </div>
+                  )}
+                  {eff.resolutions.length > 0 && (
+                    <div className="flex gap-2 items-baseline">
+                      <span className="text-emerald-500/80 font-bold uppercase shrink-0" style={{ fontSize: `${effectFontSize - 2}px` }}>Result:</span>
+                      <span className="text-emerald-100 leading-[1.2]">{eff.resolutions.map(r => renderResolutionText(r)).join(", ")}</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Bottom Stats */}
           {card.type === CardType.MONSTER && (
-            <div className="flex justify-between font-mono text-sm border-t border-slate-800 pt-3">
-              <span>ATK/ {card.atk}</span>
-              <span>DEF/ {card.def}</span>
+            <div className="flex justify-between items-center font-mono border-t border-slate-800 mt-2 pt-2 text-slate-300 shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-500 font-bold text-[10px]">ATK /</span>
+                <span className="text-white font-black text-lg tracking-widest">{card.atk}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-slate-500 font-bold text-[10px]">DEF /</span>
+                <span className="text-white font-black text-lg tracking-widest">{card.def}</span>
+              </div>
             </div>
           )}
         </div>
+
         <button 
           onClick={() => onSave(card)}
-          className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-600/20"
+          className="w-[350px] py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-600/20"
         >
-          <Save className="w-5 h-5" /> Save to Collection
+          <Save className="w-5 h-5" /> Save Card Definition
         </button>
       </div>
 
       {/* Editor Form */}
       <div className="lg:col-span-2 space-y-6">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="space-y-2 col-span-2">
               <label className="text-[10px] font-bold text-slate-500 uppercase">Card Name</label>
               <input 
                 value={card.name}
@@ -233,6 +415,62 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ onSave, initialCard })
                 <option value={CardType.SPELL}>Spell</option>
               </select>
             </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-slate-500 uppercase">Attribute</label>
+              <select 
+                value={card.attribute}
+                onChange={e => setCard({...card, attribute: e.target.value as CardAttribute})}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-slate-200"
+              >
+                {Object.values(CardAttribute).map(a => <option key={a} value={a}>{a}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {card.type === CardType.MONSTER && (
+            <div className="grid grid-cols-3 gap-4 animate-in fade-in slide-in-from-top-2">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-500 uppercase">Level</label>
+                <input 
+                  type="number"
+                  value={card.level ?? ""}
+                  onChange={e => setCard({...card, level: e.target.value === "" ? undefined : parseInt(e.target.value)})}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-slate-200 outline-none"
+                  min="1" max="12"
+                  placeholder="1"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-red-500/50 uppercase">Attack (ATK)</label>
+                <input 
+                  type="number"
+                  value={card.atk ?? ""}
+                  onChange={e => setCard({...card, atk: e.target.value === "" ? undefined : parseInt(e.target.value)})}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-red-400 font-bold outline-none focus:border-red-500"
+                  placeholder="0"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-indigo-500/50 uppercase">Defense (DEF)</label>
+                <input 
+                  type="number"
+                  value={card.def ?? ""}
+                  onChange={e => setCard({...card, def: e.target.value === "" ? undefined : parseInt(e.target.value)})}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-indigo-400 font-bold outline-none focus:border-indigo-500"
+                  placeholder="0"
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-bold text-slate-500 uppercase">Description / Lore</label>
+            <textarea 
+              value={card.description}
+              onChange={e => setCard({...card, description: e.target.value})}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-slate-400 text-xs min-h-[80px] outline-none focus:border-slate-700"
+              placeholder="Enter lore or additional info..."
+            />
           </div>
 
           {/* Effects Builder (The AST Core) */}
@@ -582,47 +820,304 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ onSave, initialCard })
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 mt-3">
-                        <div>
-                          <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Required Position</label>
-                          <select 
-                            value={effect.restriction.mustBePosition || ""}
-                            onChange={e => updateEffect(idx, { ...effect, restriction: { ...effect.restriction, mustBePosition: (e.target.value as any) || undefined } })}
-                            className="w-full bg-slate-950 border border-slate-800 rounded p-1.5 text-xs text-slate-300"
-                          >
-                            <option value="">Any</option>
-                            <option value="ATTACK">Attack Mode</option>
-                            <option value="DEFENSE">Defense Mode</option>
-                            <option value="FACE_UP">Face-up</option>
-                            <option value="FACE_DOWN">Face-down</option>
-                          </select>
+                      {/* Conditional logic for Position and Summon Restrictions */}
+                      {![CardLocation.GY, CardLocation.REMOVED, CardLocation.EXTRA_DECK, CardLocation.DECK].includes(effect.restriction.locations[0]) && (
+                        <div className="grid grid-cols-2 gap-2 mt-3 animate-in fade-in slide-in-from-top-1">
+                          <div>
+                            <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Required Position</label>
+                            <select 
+                              value={effect.restriction.mustBePosition || ""}
+                              onChange={e => updateEffect(idx, { ...effect, restriction: { ...effect.restriction, mustBePosition: (e.target.value as any) || undefined } })}
+                              className="w-full bg-slate-950 border border-slate-800 rounded p-1.5 text-xs text-slate-300"
+                            >
+                              <option value="">Any</option>
+                              {/* Attack/Defense only make sense in Monster Zone */}
+                              {effect.restriction.locations[0] === CardLocation.MONSTER_ZONE && (
+                                <>
+                                  <option value="ATTACK">Attack Mode</option>
+                                  <option value="DEFENSE">Defense Mode</option>
+                                </>
+                              )}
+                              <option value="FACE_UP">Face-up</option>
+                              <option value="FACE_DOWN">Face-down</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Summon Restriction</label>
+                            <select 
+                              value={effect.restriction.summonRestriction || "NONE"}
+                              onChange={e => updateEffect(idx, { ...effect, restriction: { ...effect.restriction, summonRestriction: (e.target.value as any) } })}
+                              className="w-full bg-slate-950 border border-slate-800 rounded p-1.5 text-xs text-slate-300"
+                            >
+                              <option value="NONE">None</option>
+                              <option value="ONLY_SPECIAL">Cannot be Normal</option>
+                              <option value="ONLY_NORMAL">Cannot be Special</option>
+                              <option value="CANNOT_SUMMON">Cannot be Summoned</option>
+                            </select>
+                          </div>
                         </div>
-                        <div>
-                          <label className="text-[9px] font-bold text-slate-500 uppercase block mb-1">Summon Restriction</label>
-                          <select 
-                            value={effect.restriction.summonRestriction || "NONE"}
-                            onChange={e => updateEffect(idx, { ...effect, restriction: { ...effect.restriction, summonRestriction: (e.target.value as any) } })}
-                            className="w-full bg-slate-950 border border-slate-800 rounded p-1.5 text-xs text-slate-300"
-                          >
-                            <option value="NONE">None</option>
-                            <option value="ONLY_SPECIAL">Cannot be Normal</option>
-                            <option value="ONLY_NORMAL">Cannot be Special</option>
-                            <option value="CANNOT_SUMMON">Cannot be Summoned</option>
-                          </select>
-                        </div>
-                      </div>
+                      )}
                     </div>
                   </div>
 
                   {/* Actions (COST & RESOLUTION) */}
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500 uppercase">
-                      <Coins className="w-3 h-3" /> Costs & Resolutions
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-slate-800">
+                    {/* Costs Editor */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-[10px] font-bold text-red-400 uppercase">
+                          <Coins className="w-3 h-3" /> Costs (Mandatory)
+                        </div>
+                        <button 
+                          onClick={() => {
+                            const newCosts = [...effect.costs, { action: "PAY_LP", params: { n: 500 } }];
+                            updateEffect(idx, { ...effect, costs: newCosts });
+                          }}
+                          className="text-[9px] bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white px-2 py-1 rounded transition-all"
+                        >
+                          + Add Cost
+                        </button>
+                      </div>
+                      <div className="space-y-2">
+                        {effect.costs.map((cost, cIdx) => (
+                          <div key={cIdx} className="space-y-2 animate-in slide-in-from-right-1">
+                            <div className="flex gap-2 items-center bg-slate-900/50 p-2 rounded-lg border border-slate-800">
+                              <select 
+                                value={cost.action}
+                                onChange={e => {
+                                  const newCosts = [...effect.costs];
+                                  newCosts[cIdx] = { ...cost, action: e.target.value };
+                                  updateEffect(idx, { ...effect, costs: newCosts });
+                                }}
+                                className="bg-transparent text-[11px] font-bold text-slate-300 outline-none flex-1"
+                              >
+                                {COST_OPTIONS.map(opt => <option key={opt.value} value={opt.value} className="bg-slate-900">{opt.label}</option>)}
+                              </select>
+                              <input 
+                                type="number"
+                                value={cost.params.n}
+                                onChange={e => {
+                                  const newCosts = [...effect.costs];
+                                  newCosts[cIdx] = { ...cost, params: { ...cost.params, n: parseInt(e.target.value) || 0 } };
+                                  updateEffect(idx, { ...effect, costs: newCosts });
+                                }}
+                                className="w-12 bg-slate-950 border border-slate-800 rounded px-1 text-center text-[11px] text-indigo-400 font-bold"
+                              />
+                              <button 
+                                onClick={() => {
+                                  const newCosts = effect.costs.filter((_, i) => i !== cIdx);
+                                  updateEffect(idx, { ...effect, costs: newCosts });
+                                }}
+                                className="text-slate-600 hover:text-red-400"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                            {/* Filter Sub-Editor */}
+                            {cost.action !== "PAY_LP" && (
+                              <div className="pl-2 pr-2 pb-2 bg-slate-900/20 rounded-b-lg border-x border-b border-slate-800/50 grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="text-[8px] text-slate-500 uppercase font-bold block mb-1">Target Type</label>
+                                  <select 
+                                    value={cost.params.filter?.targetType || ""}
+                                    onChange={e => {
+                                      const newCosts = [...effect.costs];
+                                      newCosts[cIdx] = { ...cost, params: { ...cost.params, filter: { ...cost.params.filter, targetType: e.target.value } } };
+                                      updateEffect(idx, { ...effect, costs: newCosts });
+                                    }}
+                                    className="w-full bg-slate-950 border border-slate-800 rounded p-1 text-[10px] text-slate-400"
+                                  >
+                                    <option value="">Any</option>
+                                    <option value="MONSTER">Monster</option>
+                                    <option value="SPELL">Spell</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[8px] text-slate-500 uppercase font-bold block mb-1">Attribute</label>
+                                  <select 
+                                    value={cost.params.filter?.attribute || ""}
+                                    onChange={e => {
+                                      const newCosts = [...effect.costs];
+                                      newCosts[cIdx] = { ...cost, params: { ...cost.params, filter: { ...cost.params.filter, attribute: e.target.value } } };
+                                      updateEffect(idx, { ...effect, costs: newCosts });
+                                    }}
+                                    className="w-full bg-slate-950 border border-slate-800 rounded p-1 text-[10px] text-slate-400"
+                                  >
+                                    <option value="">Any</option>
+                                    {Object.values(CardAttribute).map(a => <option key={a} value={a}>{a}</option>)}
+                                  </select>
+                                </div>
+                                <div className="col-span-2 space-y-2">
+                                  <input 
+                                    placeholder="Filter by Card Name..."
+                                    type="text"
+                                    value={cost.params.filter?.cardName || ""}
+                                    onChange={e => {
+                                      const newCosts = [...effect.costs];
+                                      newCosts[cIdx] = { ...cost, params: { ...cost.params, filter: { ...cost.params.filter, cardName: e.target.value } } };
+                                      updateEffect(idx, { ...effect, costs: newCosts });
+                                    }}
+                                    className="w-full bg-slate-950 border border-slate-800 rounded p-1 text-[10px] text-slate-400 outline-none focus:border-indigo-500"
+                                  />
+                                  <div className="flex gap-2">
+                                    <input 
+                                      placeholder="Min ATK"
+                                      type="number"
+                                      value={cost.params.filter?.minAtk || ""}
+                                      onChange={e => {
+                                        const newCosts = [...effect.costs];
+                                        newCosts[cIdx] = { ...cost, params: { ...cost.params, filter: { ...cost.params.filter, minAtk: parseInt(e.target.value) || undefined } } };
+                                        updateEffect(idx, { ...effect, costs: newCosts });
+                                      }}
+                                      className="flex-1 bg-slate-950 border border-slate-800 rounded p-1 text-[10px] text-slate-400"
+                                    />
+                                    <input 
+                                      placeholder="Max Level"
+                                      type="number"
+                                      value={cost.params.filter?.maxLevel || ""}
+                                      onChange={e => {
+                                        const newCosts = [...effect.costs];
+                                        newCosts[cIdx] = { ...cost, params: { ...cost.params, filter: { ...cost.params.filter, maxLevel: parseInt(e.target.value) || undefined } } };
+                                        updateEffect(idx, { ...effect, costs: newCosts });
+                                      }}
+                                      className="flex-1 bg-slate-950 border border-slate-800 rounded p-1 text-[10px] text-slate-400"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    <div className="flex gap-2 items-center text-xs">
-                      <span className="text-red-400 bg-red-400/10 px-2 py-1 rounded">PAY_LP(500)</span>
-                      <ArrowRightIcon className="w-3 h-3 text-slate-700" />
-                      <span className="text-emerald-400 bg-emerald-400/10 px-2 py-1 rounded">DRAW(2)</span>
+
+                    {/* Resolutions Editor */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-[10px] font-bold text-emerald-400 uppercase">
+                          <PlayCircle className="w-3 h-3" /> Resolutions (Result)
+                        </div>
+                        <button 
+                          onClick={() => {
+                            const newRes = [...effect.resolutions, { action: "DRAW", params: { n: 1 } }];
+                            updateEffect(idx, { ...effect, resolutions: newRes });
+                          }}
+                          className="text-[9px] bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-white px-2 py-1 rounded transition-all"
+                        >
+                          + Add Action
+                        </button>
+                      </div>
+                      <div className="space-y-2">
+                        {effect.resolutions.map((res, rIdx) => (
+                          <div key={rIdx} className="space-y-2 animate-in slide-in-from-right-1">
+                            <div className="flex gap-2 items-center bg-slate-900/50 p-2 rounded-lg border border-slate-800">
+                              <select 
+                                value={res.action}
+                                onChange={e => {
+                                  const newRes = [...effect.resolutions];
+                                  newRes[rIdx] = { ...res, action: e.target.value };
+                                  updateEffect(idx, { ...effect, resolutions: newRes });
+                                }}
+                                className="bg-transparent text-[11px] font-bold text-slate-300 outline-none flex-1"
+                              >
+                                {RESOLUTION_OPTIONS.map(opt => <option key={opt.value} value={opt.value} className="bg-slate-900">{opt.label}</option>)}
+                              </select>
+                              <input 
+                                type="number"
+                                value={res.params.n}
+                                onChange={e => {
+                                  const newRes = [...effect.resolutions];
+                                  newRes[rIdx] = { ...res, params: { ...res.params, n: parseInt(e.target.value) || 0 } };
+                                  updateEffect(idx, { ...effect, resolutions: newRes });
+                                }}
+                                className="w-12 bg-slate-950 border border-slate-800 rounded px-1 text-center text-[11px] text-emerald-400 font-bold"
+                              />
+                              <button 
+                                onClick={() => {
+                                  const newRes = effect.resolutions.filter((_, i) => i !== rIdx);
+                                  updateEffect(idx, { ...effect, resolutions: newRes });
+                                }}
+                                className="text-slate-600 hover:text-red-400"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                            {/* Filter Sub-Editor for Resolutions */}
+                            {["DESTROY_ENEMY", "ADD_TO_HAND", "SUMMON_FROM_DECK", "BANISH_ENEMY"].includes(res.action) && (
+                              <div className="pl-2 pr-2 pb-2 bg-slate-900/20 rounded-b-lg border-x border-b border-slate-800/50 grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="text-[8px] text-slate-500 uppercase font-bold block mb-1">Target Type</label>
+                                  <select 
+                                    value={res.params.filter?.targetType || ""}
+                                    onChange={e => {
+                                      const newRes = [...effect.resolutions];
+                                      newRes[rIdx] = { ...res, params: { ...res.params, filter: { ...res.params.filter, targetType: e.target.value } } };
+                                      updateEffect(idx, { ...effect, resolutions: newRes });
+                                    }}
+                                    className="w-full bg-slate-950 border border-slate-800 rounded p-1 text-[10px] text-slate-400"
+                                  >
+                                    <option value="">Any</option>
+                                    <option value="MONSTER">Monster</option>
+                                    <option value="SPELL">Spell</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[8px] text-slate-500 uppercase font-bold block mb-1">Attribute</label>
+                                  <select 
+                                    value={res.params.filter?.attribute || ""}
+                                    onChange={e => {
+                                      const newRes = [...effect.resolutions];
+                                      newRes[rIdx] = { ...res, params: { ...res.params, filter: { ...res.params.filter, attribute: e.target.value } } };
+                                      updateEffect(idx, { ...effect, resolutions: newRes });
+                                    }}
+                                    className="w-full bg-slate-950 border border-slate-800 rounded p-1 text-[10px] text-slate-400"
+                                  >
+                                    <option value="">Any</option>
+                                    {Object.values(CardAttribute).map(a => <option key={a} value={a}>{a}</option>)}
+                                  </select>
+                                </div>
+                                <div className="col-span-2 space-y-2">
+                                  <input 
+                                    placeholder="Filter by Card Name..."
+                                    type="text"
+                                    value={res.params.filter?.cardName || ""}
+                                    onChange={e => {
+                                      const newRes = [...effect.resolutions];
+                                      newRes[rIdx] = { ...res, params: { ...res.params, filter: { ...res.params.filter, cardName: e.target.value } } };
+                                      updateEffect(idx, { ...effect, resolutions: newRes });
+                                    }}
+                                    className="w-full bg-slate-950 border border-slate-800 rounded p-1 text-[10px] text-slate-400 outline-none focus:border-emerald-500"
+                                  />
+                                  <div className="flex gap-2">
+                                    <input 
+                                      placeholder="Max ATK"
+                                      type="number"
+                                      value={res.params.filter?.maxAtk || ""}
+                                      onChange={e => {
+                                        const newRes = [...effect.resolutions];
+                                        newRes[rIdx] = { ...res, params: { ...res.params, filter: { ...res.params.filter, maxAtk: parseInt(e.target.value) || undefined } } };
+                                        updateEffect(idx, { ...effect, resolutions: newRes });
+                                      }}
+                                      className="flex-1 bg-slate-950 border border-slate-800 rounded p-1 text-[10px] text-slate-400"
+                                    />
+                                    <input 
+                                      placeholder="Min Level"
+                                      type="number"
+                                      value={res.params.filter?.minLevel || ""}
+                                      onChange={e => {
+                                        const newRes = [...effect.resolutions];
+                                        newRes[rIdx] = { ...res, params: { ...res.params, filter: { ...res.params.filter, minLevel: parseInt(e.target.value) || undefined } } };
+                                        updateEffect(idx, { ...effect, resolutions: newRes });
+                                      }}
+                                      className="flex-1 bg-slate-950 border border-slate-800 rounded p-1 text-[10px] text-slate-400"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>

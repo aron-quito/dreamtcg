@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: dreamtcg-app
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    # Forzamos a que use el host 0.0.0.0 para que Docker permita la conexión externa
+    command: npm run dev -- --host 0.0.0.0 --port 3000
