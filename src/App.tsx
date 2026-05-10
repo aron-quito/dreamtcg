@@ -26,6 +26,7 @@ import {
   DeckDefinition,
   GameState
 } from './types';
+import { ConfirmModal } from './components/ConfirmModal';
 
 // Initial Mock Data
 const INITIAL_COLLECTION: CardDefinition[] = [
@@ -89,19 +90,43 @@ export default function App() {
   const [activeModule, setActiveModule] = useState<Module>('BUILDER');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [collection, setCollection] = useState<CardDefinition[]>(INITIAL_COLLECTION);
+  const [decks, setDecks] = useState<DeckDefinition[]>([]);
   const [activeDeck, setActiveDeck] = useState<DeckDefinition>({
-    id: 'deck_01',
-    name: 'My Starter Deck',
-    mainCards: ['base_01', 'base_01', 'base_02'],
+    id: 'deck_default',
+    name: 'New Deck',
+    mainCards: [],
     extraCards: []
   });
 
-  // Fetch collection on mount
+  const [modalConfig, setModalConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText?: string;
+    cancelText?: string;
+    variant: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+    onCancel?: () => void;
+  } | null>(null);
+
+  const closeModal = () => setModalConfig(prev => prev ? { ...prev, isOpen: false } : null);
+
+  // Fetch initial data
   React.useEffect(() => {
+    // Fetch Cards
     fetch('http://localhost:3001/api/cards')
       .then(res => res.json())
       .then(data => setCollection(data))
       .catch(err => console.error("Failed to load collection:", err));
+
+    // Fetch Decks
+    fetch('http://localhost:3001/api/decks')
+      .then(res => res.json())
+      .then(data => {
+        setDecks(data);
+        if (data.length > 0) setActiveDeck(data[0]);
+      })
+      .catch(err => console.error("Failed to load decks:", err));
   }, []);
 
   const handleSaveCard = async (card: CardDefinition) => {
@@ -122,11 +147,134 @@ export default function App() {
           }
           return [...prev, card];
         });
-        setActiveModule('DECK');
       }
     } catch (error) {
       console.error("Failed to save card:", error);
     }
+  };
+
+  const handleDeleteCard = async (id: string) => {
+    const cardToDelete = collection.find(c => c.id === id);
+    if (!cardToDelete) return;
+
+    setModalConfig({
+      isOpen: true,
+      title: "Delete Card",
+      message: `Are you sure you want to PERMANENTLY DELETE the card "${cardToDelete.name}"? This will remove it from all decks.`,
+      confirmText: "Delete Card",
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          const response = await fetch(`http://localhost:3001/api/cards/${id}`, {
+            method: 'DELETE'
+          });
+          if (response.ok) {
+            setCollection(prev => prev.filter(c => c.id !== id));
+          }
+        } catch (error) {
+          console.error("Failed to delete card:", error);
+        }
+        closeModal();
+      }
+    });
+  };
+
+  const isDeckDirty = (deck: DeckDefinition) => {
+    const savedDeck = decks.find(d => d.id === deck.id);
+    if (!savedDeck) return deck.mainCards.length > 0; // New unsaved deck
+    return JSON.stringify(deck.mainCards) !== JSON.stringify(savedDeck.mainCards) || deck.name !== savedDeck.name;
+  };
+
+  const confirmUnsavedChanges = async (onProceed: () => void) => {
+    if (isDeckDirty(activeDeck)) {
+      setModalConfig({
+        isOpen: true,
+        title: "Unsaved Changes",
+        message: `The deck "${activeDeck.name}" has changes. Do you want to save them before leaving?`,
+        confirmText: "Save & Continue",
+        cancelText: "Discard Changes",
+        variant: 'warning',
+        onConfirm: async () => {
+          await handleSaveDeck(activeDeck);
+          closeModal();
+          onProceed();
+        },
+        onCancel: () => {
+          closeModal();
+          onProceed();
+        }
+      });
+    } else {
+      onProceed();
+    }
+  };
+
+  const handleSaveDeck = async (deck: DeckDefinition) => {
+    try {
+      const response = await fetch('http://localhost:3001/api/decks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(deck)
+      });
+
+      if (response.ok) {
+        setDecks(prev => {
+          const exists = prev.findIndex(d => d.id === deck.id);
+          if (exists >= 0) {
+            const next = [...prev];
+            next[exists] = deck;
+            return next;
+          }
+          return [...prev, deck];
+        });
+      }
+    } catch (error) {
+      console.error("Failed to save deck:", error);
+    }
+  };
+
+  const handleDeleteDeck = async (id: string) => {
+    const deckToDelete = decks.find(d => d.id === id) || activeDeck;
+    
+    setModalConfig({
+      isOpen: true,
+      title: "Delete Deck",
+      message: `⚠️ Are you sure you want to PERMANENTLY DELETE the deck "${deckToDelete.name}"? This action cannot be undone.`,
+      confirmText: "Delete Permanently",
+      variant: 'danger',
+      onConfirm: async () => {
+        try {
+          const response = await fetch(`http://localhost:3001/api/decks/${id}`, {
+            method: 'DELETE'
+          });
+
+          if (response.ok) {
+            setDecks(prev => prev.filter(d => d.id !== id));
+            if (activeDeck.id === id) {
+              const newDeck = { id: crypto.randomUUID(), name: 'New Deck', mainCards: [], extraCards: [] };
+              setActiveDeck(newDeck);
+            }
+          }
+        } catch (error) {
+          console.error("Failed to delete deck:", error);
+        }
+        closeModal();
+      }
+    });
+  };
+
+  const handleCreateDeck = () => {
+    confirmUnsavedChanges(() => {
+      const newDeck = { id: crypto.randomUUID(), name: 'New Deck', mainCards: [], extraCards: [] };
+      setActiveDeck(newDeck);
+    });
+  };
+
+  const handleSelectDeck = (deck: DeckDefinition) => {
+    if (activeDeck.id === deck.id) return;
+    confirmUnsavedChanges(() => {
+      setActiveDeck(deck);
+    });
   };
 
   return (
@@ -199,13 +347,23 @@ export default function App() {
 
         <section className="p-8 max-w-[1400px] mx-auto">
           {activeModule === 'BUILDER' && (
-            <CardBuilder onSave={handleSaveCard} />
+            <CardBuilder 
+              collection={collection} 
+              onSave={handleSaveCard} 
+              onDelete={handleDeleteCard}
+            />
           )}
           {activeModule === 'DECK' && (
             <DeckBuilder 
               collection={collection} 
-              deck={activeDeck} 
-              onUpdateDeck={setActiveDeck} 
+              decks={decks}
+              currentDeck={activeDeck} 
+              onUpdateDeck={setActiveDeck}
+              onSaveDeck={handleSaveDeck}
+              onDeleteDeck={handleDeleteDeck}
+              onCreateDeck={handleCreateDeck}
+              onSelectDeck={handleSelectDeck}
+              hasUnsavedChanges={isDeckDirty(activeDeck)}
             />
           )}
           {activeModule === 'TEST' && (
@@ -216,6 +374,20 @@ export default function App() {
           )}
         </section>
       </main>
+
+      {modalConfig && (
+        <ConfirmModal 
+          isOpen={modalConfig.isOpen}
+          title={modalConfig.title}
+          message={modalConfig.message}
+          confirmText={modalConfig.confirmText}
+          cancelText={modalConfig.cancelText}
+          variant={modalConfig.variant}
+          onConfirm={modalConfig.onConfirm}
+          onCancel={modalConfig.onCancel || closeModal}
+          onClose={closeModal}
+        />
+      )}
     </div>
   );
 }

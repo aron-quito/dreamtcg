@@ -86,7 +86,13 @@ export interface CardDefinition {
   attribute?: CardAttribute;
   description: string;
   effects: CardEffect[];
+  image?: string; // Base64 or URL
   isCustom: boolean;
+  isPublic?: boolean;
+  limit?: number; // 0, 1, 2, 3
+  mainAdjustments?: { x: number; y: number; zoom: number };
+  mini1Adjustments?: { x: number; y: number; zoom: number };
+  mini2Adjustments?: { x: number; y: number; zoom: number };
 }
 
 // --- ENGINE STATE ---
