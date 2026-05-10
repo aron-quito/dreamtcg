@@ -1,0 +1,6 @@
+{
+  "name": "DreamsTCG Engine Core",
+  "description": "A modular TCG engine and custom card builder architecture featuring an event-driven rules system and node-based effect AST.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
