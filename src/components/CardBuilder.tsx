@@ -911,7 +911,8 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ collection, onSave, on
                     </div>
 
                     {/* ROW 1: TRIGGER & STATE */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* LEFT: Event Trigger */}
                       <div className="p-5 bg-slate-950/40 rounded-2xl border border-slate-800/50 space-y-3 shadow-inner">
                         <div className="flex items-center gap-2 text-[10px] font-black text-indigo-400 uppercase tracking-widest">
                           <Zap className="w-3 h-3" /> Event Trigger
@@ -931,57 +932,60 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ collection, onSave, on
                         />
                       </div>
 
-                      <div className="p-5 bg-slate-950/40 rounded-2xl border border-slate-800/50 space-y-3 shadow-inner">
-                        <div className="flex items-center gap-2 text-[10px] font-black text-emerald-400 uppercase tracking-widest">
-                          <Activity className="w-3 h-3" /> Frequency Limit
-                        </div>
-                        <select 
-                          value={effect.restriction.frequency}
-                          onChange={e => updateEffect(idx, { ...effect, restriction: { ...effect.restriction, frequency: e.target.value as FrequencyType } })}
-                          className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-300 text-xs font-bold outline-none focus:border-emerald-500 transition-all"
-                        >
-                          {Object.values(FrequencyType).map(t => (
-                            <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="p-5 bg-slate-950/40 rounded-2xl border border-slate-800/50 space-y-3 shadow-inner lg:col-span-2">
-                        <div className="flex items-center gap-2 text-[10px] font-black text-amber-400 uppercase tracking-widest">
-                          <MapPin className="w-3 h-3" /> Valid Location & State Restrictions
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      {/* RIGHT: Frequency + Location stacked */}
+                      <div className="flex flex-col gap-4">
+                        <div className="p-5 bg-slate-950/40 rounded-2xl border border-slate-800/50 space-y-3 shadow-inner">
+                          <div className="flex items-center gap-2 text-[10px] font-black text-emerald-400 uppercase tracking-widest">
+                            <Activity className="w-3 h-3" /> Frequency Limit
+                          </div>
                           <select 
-                            value={effect.restriction.locations[0] || CardLocation.MONSTER_ZONE}
-                            onChange={e => updateEffect(idx, { ...effect, restriction: { ...effect.restriction, locations: [e.target.value as CardLocation] } })}
-                            className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-300 text-xs font-bold outline-none focus:border-amber-500 transition-all cursor-pointer"
+                            value={effect.restriction.frequency}
+                            onChange={e => updateEffect(idx, { ...effect, restriction: { ...effect.restriction, frequency: e.target.value as FrequencyType } })}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-300 text-xs font-bold outline-none focus:border-emerald-500 transition-all"
                           >
-                            {Object.values(CardLocation).map(t => (
+                            {Object.values(FrequencyType).map(t => (
                               <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
                             ))}
                           </select>
-                          
-                          <select 
-                            value={effect.restriction.mustBePosition || 'ANY'}
-                            onChange={e => updateEffect(idx, { ...effect, restriction: { ...effect.restriction, mustBePosition: e.target.value === 'ANY' ? undefined : e.target.value } })}
-                            className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-300 text-xs font-bold outline-none focus:border-amber-500 transition-all cursor-pointer"
-                          >
-                            <option value="ANY">ANY POSITION</option>
-                            <option value="FACE_UP">FACE UP</option>
-                            <option value="FACE_DOWN">FACE DOWN</option>
-                            <option value="ATTACK">ATTACK POS</option>
-                            <option value="DEFENSE">DEFENSE POS</option>
-                          </select>
+                        </div>
 
-                          <select 
-                            value={effect.restriction.summonRestriction || 'NONE'}
-                            onChange={e => updateEffect(idx, { ...effect, restriction: { ...effect.restriction, summonRestriction: e.target.value === 'NONE' ? undefined : e.target.value } })}
-                            className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-300 text-xs font-bold outline-none focus:border-amber-500 transition-all cursor-pointer"
-                          >
-                            <option value="NONE">NO SUMMON RESTRICTION</option>
-                            <option value="ONLY_SPECIAL">ONLY SPECIAL SUMMON</option>
-                            <option value="ONLY_NORMAL">ONLY NORMAL SUMMON</option>
-                          </select>
+                        <div className="p-5 bg-slate-950/40 rounded-2xl border border-slate-800/50 space-y-3 shadow-inner flex-1">
+                          <div className="flex items-center gap-2 text-[10px] font-black text-amber-400 uppercase tracking-widest">
+                            <MapPin className="w-3 h-3" /> Valid Location & State
+                          </div>
+                          <div className="flex flex-col gap-3">
+                            <select 
+                              value={effect.restriction.locations[0] || CardLocation.MONSTER_ZONE}
+                              onChange={e => updateEffect(idx, { ...effect, restriction: { ...effect.restriction, locations: [e.target.value as CardLocation] } })}
+                              className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-300 text-xs font-bold outline-none focus:border-amber-500 transition-all cursor-pointer"
+                            >
+                              {Object.values(CardLocation).map(t => (
+                                <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>
+                              ))}
+                            </select>
+                            
+                            <select 
+                              value={effect.restriction.mustBePosition || 'ANY'}
+                              onChange={e => updateEffect(idx, { ...effect, restriction: { ...effect.restriction, mustBePosition: e.target.value === 'ANY' ? undefined : e.target.value } })}
+                              className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-300 text-xs font-bold outline-none focus:border-amber-500 transition-all cursor-pointer"
+                            >
+                              <option value="ANY">ANY POSITION</option>
+                              <option value="FACE_UP">FACE UP</option>
+                              <option value="FACE_DOWN">FACE DOWN</option>
+                              <option value="ATTACK">ATTACK POS</option>
+                              <option value="DEFENSE">DEFENSE POS</option>
+                            </select>
+
+                            <select 
+                              value={effect.restriction.summonRestriction || 'NONE'}
+                              onChange={e => updateEffect(idx, { ...effect, restriction: { ...effect.restriction, summonRestriction: e.target.value === 'NONE' ? undefined : e.target.value } })}
+                              className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-slate-300 text-xs font-bold outline-none focus:border-amber-500 transition-all cursor-pointer"
+                            >
+                              <option value="NONE">NO SUMMON RESTRICTION</option>
+                              <option value="ONLY_SPECIAL">ONLY SPECIAL SUMMON</option>
+                              <option value="ONLY_NORMAL">ONLY NORMAL SUMMON</option>
+                            </select>
+                          </div>
                         </div>
                       </div>
                     </div>
