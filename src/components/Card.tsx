@@ -115,8 +115,7 @@ const renderRestrictionText = (restr: any) => {
   if (restr.summonRestriction && restr.summonRestriction !== "NONE") {
     const sMap: Record<string, string> = {
       "ONLY_SPECIAL": "No puede ser Invocado de Modo Normal",
-      "ONLY_NORMAL": "No puede ser Invocado de Modo Especial",
-      "CANNOT_SUMMON": "No puede ser Invocado"
+      "ONLY_NORMAL": "No puede ser Invocado de Modo Especial"
     };
     base += `. ${sMap[restr.summonRestriction]}`;
   }
@@ -242,20 +241,30 @@ export const Card: React.FC<CardProps> = ({ card, className = "", isMiniature = 
       <div className={`w-full bg-slate-950 rounded-sm border border-slate-800/50 relative flex items-center justify-center overflow-hidden shrink-0 
         ${isUltraMiniature ? 'flex-1 mt-0' : (isMiniature ? 'flex-1 mt-1' : 'aspect-video mt-[2%]')}`}>
          {card.image ? (
-           <img 
-             src={card.image} 
-             alt={card.name} 
-             className="w-full h-full object-cover transition-none" 
-             style={{
-               transform: (() => {
-                 const adj = isUltraMiniature 
-                   ? card.mini2Adjustments 
-                   : (isMiniature ? card.mini1Adjustments : card.mainAdjustments);
-                 return `translate(${adj?.x || 0}%, ${adj?.y || 0}%) scale(${adj?.zoom || 1})`;
-               })(),
-               transformOrigin: 'center center'
-             }}
-           />
+           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+             <div 
+               className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+               style={{ 
+                 height: `${(isUltraMiniature || isMiniature) ? 125 : 200}%`,
+                 aspectRatio: '600 / 450'
+               }}
+             >
+               <img 
+                 src={card.image} 
+                 alt={card.name} 
+                 className="w-full h-full object-contain transition-none" 
+                 style={{
+                   transform: (() => {
+                     const adj = isUltraMiniature 
+                       ? card.mini2Adjustments 
+                       : (isMiniature ? card.mini1Adjustments : card.mainAdjustments);
+                     return `translate(${adj?.x || 0}%, ${adj?.y || 0}%) scale(${adj?.zoom || 1})`;
+                   })(),
+                   transformOrigin: 'center center'
+                 }}
+               />
+             </div>
+           </div>
          ) : (
            <Package className={`${isUltraMiniature ? 'w-3 h-3' : (isMiniature ? 'w-4 h-4' : 'w-10 h-10')} text-slate-900 opacity-40`} />
          )}
