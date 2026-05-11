@@ -99,7 +99,7 @@ const ActionParamsEditor = ({ action, params, onChange }: { action: string, para
             <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Specific Name</span>
             <input 
               type="text" value={filter.cardName || ''} placeholder="e.g. CYBERSE"
-              onChange={e => update('filter', { ...filter, cardName: e.target.value || undefined })} 
+              onChange={e => update('filter', { ...filter, cardName: e.target.value.toUpperCase() || undefined })} 
               className="bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white font-bold outline-none focus:border-indigo-500 transition-all"
             />
           </div>
@@ -191,7 +191,7 @@ const TriggerParamsEditor = ({ trigger, onChange }: { trigger: Trigger, onChange
   const renderInput = (label: string, key: string) => (
     <div className="flex flex-col gap-1 flex-1 min-w-[100px]">
       <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{label}</span>
-      <input type="text" value={params[key] || ''} onChange={e => update(key, e.target.value || undefined)} className="bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white font-bold outline-none focus:border-indigo-500 transition-all" />
+      <input type="text" value={params[key] || ''} onChange={e => update(key, e.target.value.toUpperCase() || undefined)} className="bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs text-white font-bold outline-none focus:border-indigo-500 transition-all" />
     </div>
   );
 
@@ -638,7 +638,7 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ collection, onSave, on
                   </label>
                   <input 
                     value={card.name}
-                    onChange={e => setCard({ ...card, name: e.target.value })}
+                    onChange={e => setCard({ ...card, name: e.target.value.toUpperCase() })}
                     className="w-full bg-slate-950/50 border border-slate-800 group-focus-within:border-indigo-500 rounded-2xl p-4 text-white text-xl font-black uppercase tracking-tighter outline-none transition-all placeholder:text-slate-800"
                     placeholder="ENTER CARD NAME..."
                   />
@@ -906,7 +906,7 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ collection, onSave, on
                       <input 
                         type="text" 
                         value={effect.name} 
-                        onChange={e => updateEffect(idx, { ...effect, name: e.target.value })}
+                        onChange={e => updateEffect(idx, { ...effect, name: e.target.value.toUpperCase() })}
                         className="bg-transparent text-xl md:text-2xl font-black text-white uppercase tracking-tighter outline-none border-b border-transparent focus:border-indigo-500 transition-all w-3/4 pb-1"
                         placeholder="Effect Name"
                       />

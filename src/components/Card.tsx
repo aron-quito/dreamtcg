@@ -1,5 +1,5 @@
 import React from 'react';
-import { Package } from 'lucide-react';
+import { Package, Moon, Sun, Flame, Droplets, Mountain, Wind } from 'lucide-react';
 import { CardDefinition, CardType, TriggerType, CardLocation, FrequencyType, CardEffect } from '../types';
 
 // --- HELPER TRANSLATIONS ---
@@ -32,13 +32,13 @@ const ATTR_MAP: Record<string, string> = {
   "WATER": "AGUA", "FIRE": "FUEGO", "WIND": "VIENTO"
 };
 
-const ATTRIBUTE_STYLES: Record<string, { bg: string, text: string, border: string }> = {
-  "DARK": { bg: "bg-purple-950/40", text: "text-purple-400", border: "border-purple-500/50" },
-  "LIGHT": { bg: "bg-yellow-950/40", text: "text-yellow-200", border: "border-yellow-400/50" },
-  "FIRE": { bg: "bg-red-950/40", text: "text-orange-400", border: "border-orange-500/50" },
-  "WATER": { bg: "bg-blue-950/40", text: "text-blue-400", border: "border-blue-500/50" },
-  "EARTH": { bg: "bg-amber-950/40", text: "text-amber-600", border: "border-amber-800/50" },
-  "WIND": { bg: "bg-emerald-950/40", text: "text-green-400", border: "border-green-500/50" },
+const ATTRIBUTE_STYLES: Record<string, { bg: string, text: string, border: string, icon: any, shadow: string }> = {
+  "DARK": { bg: "bg-purple-950/60", text: "text-purple-400", border: "border-purple-500/40", icon: Moon, shadow: "shadow-purple-500/20" },
+  "LIGHT": { bg: "bg-yellow-100/10", text: "text-yellow-200", border: "border-yellow-400/40", icon: Sun, shadow: "shadow-yellow-400/20" },
+  "FIRE": { bg: "bg-red-950/60", text: "text-orange-500", border: "border-orange-500/40", icon: Flame, shadow: "shadow-orange-500/20" },
+  "WATER": { bg: "bg-blue-950/60", text: "text-blue-400", border: "border-blue-500/40", icon: Droplets, shadow: "shadow-blue-500/20" },
+  "EARTH": { bg: "bg-amber-950/60", text: "text-amber-600", border: "border-amber-800/40", icon: Mountain, shadow: "shadow-amber-800/20" },
+  "WIND": { bg: "bg-emerald-950/60", text: "text-green-400", border: "border-green-500/40", icon: Wind, shadow: "shadow-green-500/20" },
 };
 
 const renderFilterText = (filter: any, n: number) => {
@@ -210,17 +210,53 @@ export const Card: React.FC<CardProps> = ({
     footer: isMiniature ? fw * 0.10 : fw * 0.07,
   };
 
-  // Synchronous header scaling to prevent text overflow
+  // SPAGHETTI-SQUEEZE: Horizontal scaling for long names (Zero Wrap)
+  // Only applies to Standard view; Miniatures use simple truncation
   React.useLayoutEffect(() => {
     const hEl = headerRef.current;
-    if (!hEl || !hEl.parentElement) return;
-    let n = isUltraMiniature ? fw * 0.16 : (isMiniature ? fw * 0.13 : fw * 0.088);
+    if (!hEl || !hEl.parentElement || isMiniature || isUltraMiniature) return;
+    
+    // Set base font size
+    const n = isUltraMiniature ? fw * 0.16 : (isMiniature ? fw * 0.13 : Math.min(fw * 0.088, 22));
     hEl.style.fontSize = `${n}px`;
-    while (hEl.scrollWidth > hEl.parentElement.clientWidth && n > 6) {
-      n -= 0.5;
-      hEl.style.fontSize = `${n}px`;
-    }
+    hEl.style.transform = 'scaleX(1)'; // Reset
+    
+    // Use requestAnimationFrame to ensure layout is settled for measurement
+    const measure = () => {
+      const parentW = hEl.parentElement?.clientWidth || 0;
+      const scrollW = hEl.scrollWidth || 0;
+      
+      if (scrollW > parentW && parentW > 0) {
+        const scale = parentW / scrollW;
+        hEl.style.transform = `scaleX(${scale})`;
+      } else {
+        hEl.style.transform = 'scaleX(1)';
+      }
+    };
+    
+    measure();
+    // Double check after a frame for stability
+    const rid = requestAnimationFrame(measure);
+    return () => cancelAnimationFrame(rid);
   }, [cardWidth, card.name]);
+
+  // SPAGHETTI-SQUEEZE for ATK / DEF
+  const atkRef = React.useRef<HTMLDivElement>(null);
+  const defRef = React.useRef<HTMLDivElement>(null);
+
+  React.useLayoutEffect(() => {
+    [atkRef, defRef].forEach(ref => {
+      const el = ref.current;
+      if (!el || !el.parentElement) return;
+      el.style.transform = 'scaleX(1)';
+      const parentW = el.parentElement.clientWidth;
+      const scrollW = el.scrollWidth;
+      if (scrollW > parentW && parentW > 0) {
+        el.style.transform = `scaleX(${parentW / scrollW})`;
+        el.style.transformOrigin = ref === atkRef ? 'left center' : 'right center';
+      }
+    });
+  }, [cardWidth, card.atk, card.def]);
 
   // ─── EFFECT BOX SUB-COMPONENT ──────────────────────────────────────────────
   // Each box manages its own local scale for perfect precision
@@ -326,20 +362,32 @@ export const Card: React.FC<CardProps> = ({
       />
 
       {/* Header: name + attribute */}
-      <div className={`flex justify-between items-center ${isUltraMiniature ? 'mb-0' : (isMiniature ? 'mb-[1%]' : 'mb-[2%]')} relative z-10 shrink-0`}>
-        <h2
-          ref={headerRef}
-          className={`font-black uppercase tracking-tight truncate ${isMonster ? 'text-white' : 'text-teal-50'}`}
-          style={{ fontSize: `${fs.name}px` }}
-        >
-          {card.name || "UNNAMED CARD"}
-        </h2>
-        {!isUltraMiniature && (
-          <div
-            className={`px-1.5 py-0.5 border rounded-lg font-black uppercase shrink-0 ${attrStyle.bg} ${attrStyle.text} ${attrStyle.border}`}
-            style={{ fontSize: `${fs.attr}px` }}
+      <div className={`flex justify-between items-center ${isUltraMiniature ? 'mb-0' : (isMiniature ? 'mb-[1%]' : 'mb-[2%]')} relative z-10 shrink-0 gap-2`}>
+        <div className="flex-1 overflow-hidden">
+          <h2 
+            ref={headerRef}
+            className={`font-black uppercase tracking-tighter whitespace-nowrap origin-left ${isMonster ? 'text-white' : 'text-teal-50'} 
+              ${(isMiniature || isUltraMiniature) ? 'truncate' : ''}`}
           >
-            {isMiniature ? card.attribute?.slice(0, 3) : card.attribute}
+            {card.name || "UNNAMED CARD"}
+          </h2>
+        </div>
+        {!isUltraMiniature && (
+          <div className="relative shrink-0 flex items-center justify-center" style={{ width: `${fs.attr * 2.8}px`, height: `${fs.attr * 2.8}px` }}>
+            {/* Tétrico Aura / Glow behind the rhombus */}
+            <div 
+              className={`absolute inset-0 rounded-full blur-xl opacity-40 animate-pulse ${attrStyle.bg}`} 
+            />
+            
+            {/* The Rhombus (Diamond) */}
+            <div 
+              className={`w-[70%] h-[70%] rotate-45 border-2 flex items-center justify-center backdrop-blur-xl shadow-2xl transition-all duration-700 ${attrStyle.bg} ${attrStyle.text} ${attrStyle.border} ${attrStyle.shadow}`}
+            >
+              {/* Content (icon) rotated back to be upright */}
+              <div className="-rotate-45 flex items-center justify-center w-full h-full">
+                <attrStyle.icon className="w-[70%] h-[70%] drop-shadow-[0_0_8px_currentColor]" strokeWidth={2.5} />
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -370,10 +418,30 @@ export const Card: React.FC<CardProps> = ({
           <Package className={`${isUltraMiniature ? 'w-3 h-3' : (isMiniature ? 'w-4 h-4' : 'w-10 h-10')} text-slate-900 opacity-40`} />
         )}
         {isMonster && !isUltraMiniature && (
-          <div className={`absolute top-1.5 right-1.5 aspect-square bg-gradient-to-br from-amber-300 via-yellow-500 to-amber-600 rounded-full border-2 border-amber-900/50 flex items-center justify-center shadow-[0_4px_10px_rgba(0,0,0,0.5),inset_0_1px_2px_rgba(255,255,255,0.6)] z-20 text-black font-black
-            ${isMiniature ? 'w-5 h-5 text-[9px]' : 'w-9 h-9 text-base'}`}
-          >
-            {Math.max(1, card.level || 0)}
+          <div className={`absolute top-2 right-2 z-20 flex items-center justify-center ${isMiniature ? 'w-6 h-6' : 'w-10 h-10'}`}>
+            {/* Deep Void Aura for maximum contrast */}
+            <div className="absolute inset-[-60%] bg-black/80 blur-3xl rounded-full opacity-90" />
+            {/* Shorter, darker core shadow */}
+            <div className="absolute inset-0 bg-black/90 blur-xl rounded-full" />
+            
+            {/* Minimalist Level Badge */}
+            <div className={`relative w-full h-full bg-slate-950/80 backdrop-blur-xl rounded-full border border-white/30 flex items-center justify-center text-amber-500 font-black tracking-tighter shadow-[0_0_25px_rgba(0,0,0,0.8)]
+              ${isMiniature ? 'text-[10px]' : 'text-xl'}`}
+            >
+              {Math.max(1, card.level || 0)}
+            </div>
+          </div>
+        )}
+
+        {/* Card Status (Public/Limit) — TOP LEFT of image */}
+        {showStatus && (
+          <div className={`absolute top-2 left-2 z-20 flex gap-1.5 p-1 bg-black/40 backdrop-blur-sm rounded-full border border-white/10 shadow-lg ${isMiniature ? 'scale-75 origin-top-left' : ''}`}>
+            <div className={`w-2 h-2 rounded-full transition-all duration-500 ${card.isPublic ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-slate-700 border border-slate-500'}`} />
+            <div className={`w-2 h-2 rounded-full shadow-[0_0_8px] ${card.limit === 0 ? 'bg-red-500 shadow-red-500/50' :
+                card.limit === 1 ? 'bg-amber-500 shadow-amber-500/50' :
+                  card.limit === 2 ? 'bg-blue-500 shadow-blue-500/50' :
+                    'bg-emerald-500 shadow-emerald-500/50'}`}
+            />
           </div>
         )}
       </div>
@@ -414,31 +482,32 @@ export const Card: React.FC<CardProps> = ({
         </div>
       )}
 
-      {/* Footer: ATK / DEF / status */}
+      {/* Footer: ATK / DEF / status — Grid for absolute centering */}
       {!isUltraMiniature && (
-        <div className={`flex items-center font-mono border-t border-slate-800/50 mt-auto pt-1 text-slate-300 shrink-0 ${isMonster ? 'justify-between' : 'justify-center'}`}>
-          {isMonster && (
-            <div className="flex items-center gap-1">
-              <span className="text-slate-500 font-bold uppercase" style={{ fontSize: `calc(${fs.label} * 0.7)` }}>Atk</span>
-              <span className="text-white font-black tracking-widest" style={{ fontSize: `${fs.footer}px` }}>{card.atk ?? 0}</span>
+        <div className="border-t border-slate-800/50 mt-auto pt-1 shrink-0 px-[4%]">
+          <div className="grid grid-cols-[1fr_10px_1fr] items-center w-full font-mono text-slate-300">
+            <div className="flex items-center gap-1 overflow-hidden">
+              {isMonster && (
+                <div ref={atkRef} className="flex items-center gap-1 whitespace-nowrap origin-left">
+                  <span className="text-slate-500 font-bold uppercase" style={{ fontSize: `calc(${fs.label} * 0.7)` }}>Atk</span>
+                  <span className="text-white font-black tracking-widest" style={{ fontSize: `${fs.footer}px` }}>{card.atk ?? 0}</span>
+                </div>
+              )}
             </div>
-          )}
-          {showStatus && (
-            <div className={`flex items-center gap-2 ${isMonster ? 'px-2' : ''}`}>
-              <div className={`w-1.5 h-1.5 rounded-full transition-all duration-500 ${card.isPublic ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-slate-700 border border-slate-500'}`} />
-              <div className={`w-2 h-2 rounded-full shadow-[0_0_8px] ${card.limit === 0 ? 'bg-red-500 shadow-red-500/50' :
-                  card.limit === 1 ? 'bg-amber-500 shadow-amber-500/50' :
-                    card.limit === 2 ? 'bg-blue-500 shadow-blue-500/50' :
-                      'bg-emerald-500 shadow-emerald-500/50'}`}
-              />
+
+            <div className="flex items-center justify-center">
+              {/* Central space remains open for balance */}
             </div>
-          )}
-          {isMonster && (
-            <div className="flex items-center gap-1">
-              <span className="text-slate-500 font-bold uppercase" style={{ fontSize: `calc(${fs.label} * 0.7)` }}>Def</span>
-              <span className="text-white font-black tracking-widest" style={{ fontSize: `${fs.footer}px` }}>{card.def ?? 0}</span>
+
+            <div className="flex items-center justify-end overflow-hidden">
+              {isMonster && (
+                <div ref={defRef} className="flex items-center gap-1 whitespace-nowrap origin-right">
+                  <span className="text-slate-500 font-bold uppercase" style={{ fontSize: `calc(${fs.label} * 0.7)` }}>Def</span>
+                  <span className="text-white font-black tracking-widest" style={{ fontSize: `${fs.footer}px` }}>{card.def ?? 0}</span>
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
       )}
 

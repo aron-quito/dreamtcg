@@ -11,7 +11,9 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  X
+  X,
+  ListFilter,
+  ArrowDownAz
 } from 'lucide-react';
 import { CardDefinition, DeckDefinition, CardType, CardAttribute } from '../types';
 import { Card } from './Card';
@@ -43,6 +45,7 @@ export const DeckBuilder: React.FC<DeckBuilderProps> = ({
   const [searchQuery, setSearchQuery] = React.useState('');
   const [filterType, setFilterType] = React.useState<CardType | 'ALL'>('ALL');
   const [filterAttribute, setFilterAttribute] = React.useState<CardAttribute | 'ALL'>('ALL');
+  const [sortType, setSortType] = React.useState<'NAME' | 'LEVEL' | 'ATK'>('NAME');
 
   const addToDeck = (card: CardDefinition) => {
     if (card.isPublic === false) return;
@@ -62,16 +65,36 @@ export const DeckBuilder: React.FC<DeckBuilderProps> = ({
     onUpdateDeck({ ...currentDeck, mainCards: newCards });
   };
 
+  const sortDeck = () => {
+    const sortedIds = [...currentDeck.mainCards].sort((aId, bId) => {
+      const cardA = collection.find(c => c.id === aId);
+      const cardB = collection.find(c => c.id === bId);
+      if (!cardA || !cardB) return 0;
+      if (cardA.type !== cardB.type) return cardA.type === CardType.MONSTER ? -1 : 1;
+      return cardA.name.localeCompare(cardB.name);
+    });
+    onUpdateDeck({ ...currentDeck, mainCards: sortedIds });
+  };
+
   const publicCollection = React.useMemo(() => 
     collection.filter(c => c.isPublic === true), 
   [collection]);
 
-  const filteredCollection = publicCollection.filter(card => {
-    const matchesSearch = card.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesType = filterType === 'ALL' || card.type === filterType;
-    const matchesAttribute = filterAttribute === 'ALL' || card.attribute === filterAttribute;
-    return matchesSearch && matchesType && matchesAttribute;
-  });
+  const filteredCollection = React.useMemo(() => {
+    const filtered = publicCollection.filter(card => {
+      const matchesSearch = card.name.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesType = filterType === 'ALL' || card.type === filterType;
+      const matchesAttribute = filterAttribute === 'ALL' || card.attribute === filterAttribute;
+      return matchesSearch && matchesType && matchesAttribute;
+    });
+
+    return [...filtered].sort((a, b) => {
+      if (sortType === 'NAME') return a.name.localeCompare(b.name);
+      if (sortType === 'LEVEL') return (b.level || 0) - (a.level || 0);
+      if (sortType === 'ATK') return (b.atk || 0) - (a.atk || 0);
+      return 0;
+    });
+  }, [publicCollection, searchQuery, filterType, filterAttribute, sortType]);
 
   const mainDeckCards = currentDeck.mainCards.map(id => collection.find(c => c.id === id)).filter(Boolean) as CardDefinition[];
   const isValid = mainDeckCards.length >= 30 && mainDeckCards.length <= 60;
@@ -211,6 +234,14 @@ export const DeckBuilder: React.FC<DeckBuilderProps> = ({
               </button>
               
               <button 
+                onClick={sortDeck}
+                className="p-2.5 text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 rounded-xl transition-all"
+                title="Sort Deck (Monsters > Spells > A-Z)"
+              >
+                <ArrowDownAz className="w-4 h-4" />
+              </button>
+
+              <button 
                 onClick={() => onDeleteDeck(currentDeck.id)}
                 className="p-2.5 text-slate-600 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all"
                 title="Delete Deck"
@@ -238,7 +269,7 @@ export const DeckBuilder: React.FC<DeckBuilderProps> = ({
             {mainDeckCards.map((card, idx) => (
               <div 
                 key={`${card.id}-${idx}`}
-                onMouseEnter={() => setSelectedCard(card)}
+                onClick={() => setSelectedCard(card)}
                 className="aspect-[63/88] relative group cursor-pointer animate-in zoom-in-95 duration-200"
               >
                 <Card card={card} isUltraMiniature className="group-hover:border-indigo-500 group-hover:-translate-y-1 transition-all" />
@@ -290,6 +321,25 @@ export const DeckBuilder: React.FC<DeckBuilderProps> = ({
                 {type === 'ALL' ? 'Everything' : type}
               </button>
             ))}
+          </div>
+
+          <div className="flex items-center justify-between pt-4 border-t border-slate-800/50">
+            <div className="flex items-center gap-2">
+              <ListFilter className="w-3.5 h-3.5 text-slate-500" />
+              <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Order By</span>
+            </div>
+            <div className="flex bg-slate-950/50 p-1 rounded-xl border border-slate-800/50">
+               {['NAME', 'LEVEL', 'ATK'].map(s => (
+                 <button
+                   key={s}
+                   onClick={() => setSortType(s as any)}
+                   className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all shadow-sm
+                     ${sortType === s ? 'bg-amber-500 text-slate-950 shadow-amber-500/20' : 'text-slate-500 hover:text-slate-300'}`}
+                 >
+                   {s}
+                 </button>
+               ))}
+            </div>
           </div>
         </div>
 

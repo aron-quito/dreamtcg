@@ -7,6 +7,14 @@ export enum CardType {
   SPELL = "SPELL",
 }
 
+export enum GamePhase {
+  DREAM = "DREAM",
+  DRAW = "DRAW",
+  MAIN = "MAIN",
+  BATTLE = "BATTLE",
+  END = "END",
+}
+
 export enum CardAttribute {
   DARK = "DARK",
   LIGHT = "LIGHT",
@@ -105,7 +113,10 @@ export interface PlayerState {
   hand: string[];
   monsterZones: (string | null)[]; // Max 3
   spellZones: (string | null)[];   // Max 3
+  cardPositions: Record<string, "ATTACK" | "DEFENSE">; // instanceId -> position
+  cardVisibilities: Record<string, "FACE_UP" | "FACE_DOWN">; // instanceId -> visibility
   gy: string[];
+  removed: string[]; // Banned
   extraDeck: string[];
 }
 
@@ -119,6 +130,7 @@ export interface DeckDefinition {
 export interface GameState {
   players: [PlayerState, PlayerState];
   turn: number;
+  phase: GamePhase;
   activePlayerIndex: number;
   chain: string[]; // Stack of effect IDs
 }
