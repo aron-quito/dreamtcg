@@ -108,6 +108,7 @@ export interface CardDefinition {
 export interface PlayerState {
   id: string;
   name: string;
+  email: string;
   lp: number;
   deck: string[]; // Card IDs
   hand: string[];

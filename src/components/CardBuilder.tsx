@@ -254,11 +254,12 @@ interface CardBuilderProps {
   collection: CardDefinition[];
   onSave: (card: CardDefinition) => void;
   onDelete: (id: string) => void;
+  onNavigateToDeck?: () => void;
 }
 
 type AdjustmentType = 'MAIN' | 'MINI1' | 'MINI2';
 
-export const CardBuilder: React.FC<CardBuilderProps> = ({ collection, onSave, onDelete }) => {
+export const CardBuilder: React.FC<CardBuilderProps> = ({ collection, onSave, onDelete, onNavigateToDeck }) => {
   const [view, setView] = useState<'LIST' | 'EDIT'>('LIST');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCardId, setSelectedCardId] = useState<string | null>(collection[0]?.id || null);
@@ -545,12 +546,23 @@ export const CardBuilder: React.FC<CardBuilderProps> = ({ collection, onSave, on
                   <h2 className="text-3xl font-black tracking-tighter uppercase">Card Inventory</h2>
                   <p className="text-slate-500 text-[10px] uppercase tracking-widest font-bold mt-1">Manage your created entities</p>
                 </div>
-                <button 
-                  onClick={handleCreateNew}
-                  className="px-6 py-3 bg-gradient-to-br from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white rounded-2xl font-black uppercase text-[10px] tracking-[0.2em] transition-all shadow-lg shadow-emerald-900/30 active:scale-95 flex items-center gap-3"
-                >
-                  <Plus className="w-4 h-4" /> Create New Card
-                </button>
+                <div className="flex items-center gap-3">
+                  {onNavigateToDeck && (
+                    <button 
+                      onClick={onNavigateToDeck}
+                      className="px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-2xl font-black uppercase text-[10px] tracking-[0.2em] transition-all border border-slate-700 flex items-center gap-2"
+                      title="Manage Decks"
+                    >
+                      <Layers className="w-4 h-4" /> Decks
+                    </button>
+                  )}
+                  <button 
+                    onClick={handleCreateNew}
+                    className="px-6 py-3 bg-gradient-to-br from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white rounded-2xl font-black uppercase text-[10px] tracking-[0.2em] transition-all shadow-lg shadow-emerald-900/30 active:scale-95 flex items-center gap-3"
+                  >
+                    <Plus className="w-4 h-4" /> Create New Card
+                  </button>
+                </div>
               </div>
 
               <div className="relative mb-6">
