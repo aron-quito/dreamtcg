@@ -351,7 +351,7 @@ export const Card: React.FC<CardProps> = ({
           : 'bg-gradient-to-br from-teal-950 via-slate-900 to-slate-950 border-teal-800/50'
         }`}
       style={{
-        padding: (isMiniature || isUltraMiniature) ? '2%' : '4.2%',
+        padding: (isMiniature || isUltraMiniature) ? '4%' : '4.2%',
         minWidth: isUltraMiniature ? '60px' : (isMiniature ? '100px' : '260px'),
         minHeight: isUltraMiniature ? '84px' : (isMiniature ? '140px' : '363px')
       }}
@@ -362,10 +362,11 @@ export const Card: React.FC<CardProps> = ({
       />
 
       {/* Header: name + attribute */}
-      <div className={`flex justify-between items-center ${isUltraMiniature ? 'mb-0' : (isMiniature ? 'mb-[1%]' : 'mb-[2%]')} relative z-10 shrink-0 gap-2`}>
+      <div className={`flex justify-between items-center ${isUltraMiniature ? 'mb-0' : (isMiniature ? 'mb-[2%]' : 'mb-[2%]')} relative z-10 shrink-0 gap-2`}>
         <div className="flex-1 overflow-hidden">
           <h2 
             ref={headerRef}
+            style={{ fontSize: `${fs.name}px` }}
             className={`font-black uppercase tracking-tighter whitespace-nowrap origin-left ${isMonster ? 'text-white' : 'text-teal-50'} 
               ${(isMiniature || isUltraMiniature) ? 'truncate' : ''}`}
           >

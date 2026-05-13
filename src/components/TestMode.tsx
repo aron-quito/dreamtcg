@@ -71,7 +71,7 @@ const createPlayerState = (id: string, name: string, email: string, deckCardIds:
     id,
     name,
     email,
-    lp: 8000,
+    lp: 2000,
     deck,
     hand,
     monsterZones: [null, null, null],
@@ -80,7 +80,9 @@ const createPlayerState = (id: string, name: string, email: string, deckCardIds:
     cardVisibilities: {},
     gy: [],
     removed: [],
-    extraDeck: []
+    extraDeck: [],
+    attacksMade: {},
+    negatedInstances: []
   };
 };
 
@@ -90,8 +92,9 @@ const createGameState = (deckCardIds: string[]): GameState => ({
     createPlayerState('p2', 'Opponent', 'ai@example.com', [])
   ],
   turn: 1,
-  phase: GamePhase.DREAM,
+  phase: GamePhase.MAIN,
   activePlayerIndex: 0,
+  firstPlayerIndex: 0,
   chain: []
 });
 

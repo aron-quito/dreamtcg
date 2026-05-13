@@ -119,6 +119,8 @@ export interface PlayerState {
   gy: string[];
   removed: string[]; // Banned
   extraDeck: string[];
+  attacksMade: Record<string, number>; // instanceId -> count
+  negatedInstances: string[]; // instanceIds with negated effects
 }
 
 export interface DeckDefinition {
@@ -133,5 +135,6 @@ export interface GameState {
   turn: number;
   phase: GamePhase;
   activePlayerIndex: number;
+  firstPlayerIndex: number; // Index of the player who started the duel
   chain: string[]; // Stack of effect IDs
 }
