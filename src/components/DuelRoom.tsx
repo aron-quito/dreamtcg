@@ -12,6 +12,7 @@ import {
   Clock
 } from 'lucide-react';
 import { DeckDefinition } from '../types';
+import { API_BASE } from '../config';
 
 interface RoomState {
   id: string;
@@ -54,7 +55,7 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
   useEffect(() => {
     const fetchRoom = async () => {
       try {
-        const response = await fetch(`http://127.0.0.1:3001/api/rooms/${roomId}`);
+        const response = await fetch(`${API_BASE}/rooms/${roomId}`);
         if (response.ok) {
           const data = await response.json();
           setRoom(data);
@@ -65,7 +66,7 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
               hostDeckId: data.host_deck_id!,
               guestDeckId: data.guest_deck_id!,
               hostEmail: data.host_email,
-              guestEmail: data.guest_email!
+              guestEmail: data.player2_email!
             });
           }
         } else if (response.status === 404) {
@@ -85,7 +86,7 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
   const updateRoomState = async (updates: { deckId?: string; ready?: boolean; status?: string }) => {
     if (isSpectator) return;
     try {
-      await fetch('http://127.0.0.1:3001/api/rooms/update', {
+      await fetch(`${API_BASE}/rooms/update`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -101,7 +102,7 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
 
   const handleSwitchRole = async (target: 'PLAYER' | 'SPECTATOR') => {
     try {
-      const response = await fetch('http://127.0.0.1:3001/api/rooms/roles/switch', {
+      const response = await fetch(`${API_BASE}/rooms/roles/switch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId, email: userEmail, targetRole: target })
@@ -121,7 +122,7 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
 
   const handleExit = async () => {
     try {
-      await fetch('http://127.0.0.1:3001/api/rooms/leave', {
+      await fetch(`${API_BASE}/rooms/leave`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId, email: userEmail })

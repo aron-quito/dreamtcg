@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Loader2
 } from 'lucide-react';
+import { API_BASE } from '../config';
 
 type Choice = 'ROCK' | 'PAPER' | 'SCISSORS' | null;
 
@@ -34,7 +35,7 @@ export function RPSPhase({ roomId, userEmail, isSpectator, onFinished }: RPSPhas
   useEffect(() => {
     const fetchRoom = async () => {
       try {
-        const response = await fetch(`http://127.0.0.1:3001/api/rooms/${roomId}`);
+        const response = await fetch(`${API_BASE}/rooms/${roomId}`);
         if (response.ok) {
           const data = await response.json();
           
@@ -65,7 +66,7 @@ export function RPSPhase({ roomId, userEmail, isSpectator, onFinished }: RPSPhas
                 isResetting.current = true;
                 setTimeout(async () => {
                   try {
-                    await fetch('http://127.0.0.1:3001/api/rooms/rps/reset', {
+                    await fetch(`${API_BASE}/rooms/rps/reset`, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ roomId })
@@ -103,7 +104,7 @@ export function RPSPhase({ roomId, userEmail, isSpectator, onFinished }: RPSPhas
     setMyChoice(choice);
     localChoiceLocked.current = choice;
     try {
-      await fetch('http://127.0.0.1:3001/api/rooms/rps', {
+      await fetch(`${API_BASE}/rooms/rps`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId, email: userEmail, choice })
@@ -122,7 +123,7 @@ export function RPSPhase({ roomId, userEmail, isSpectator, onFinished }: RPSPhas
       // If I am P2 and choose to go second -> Turn 0
       const turnOrder = goFirst ? (isP1 ? 0 : 1) : (isP1 ? 1 : 0);
 
-      await fetch('http://127.0.0.1:3001/api/rooms/update', {
+      await fetch(`${API_BASE}/rooms/update`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId, email: userEmail, status: 'DUELING', turnOrder })

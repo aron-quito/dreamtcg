@@ -32,6 +32,7 @@ import { DuelLobby } from './components/DuelLobby';
 import { DuelRoom } from './components/DuelRoom';
 import { RPSPhase } from './components/RPSPhase';
 import { DuelBoard } from './components/DuelBoard';
+import { API_BASE } from './config';
 
 interface UserData {
   name: string;
@@ -86,7 +87,7 @@ const INITIAL_COLLECTION: CardDefinition[] = [
 
 
 
-type Module = 'HOME' | 'BUILDER' | 'DECK' | 'TEST' | 'SHOP' | 'DUEL_LOBBY' | 'DUEL_ROOM' | 'DUEL_RPS';
+type Module = 'HOME' | 'BUILDER' | 'DECK' | 'TEST' | 'SHOP' | 'DUEL_LOBBY' | 'DUEL_ROOM' | 'DUEL_RPS' | 'DUEL_BOARD';
 
 export default function App() {
   const [user, setUser] = useState<UserData | null>(null);
@@ -101,7 +102,7 @@ export default function App() {
   });
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
   const [isSpectator, setIsSpectator] = useState(false);
-  const [activeModule, setActiveModule] = useState<'HOME' | 'BUILDER' | 'DECK' | 'SHOP' | 'TEST' | 'DUEL_LOBBY' | 'DUEL_ROOM' | 'DUEL_RPS'>('HOME');
+  const [activeModule, setActiveModule] = useState<'HOME' | 'BUILDER' | 'DECK' | 'SHOP' | 'TEST' | 'DUEL_LOBBY' | 'DUEL_ROOM' | 'DUEL_RPS' | 'DUEL_BOARD'>('HOME');
 
   const [modalConfig, setModalConfig] = useState<{
     isOpen: boolean;
@@ -114,6 +115,8 @@ export default function App() {
     onCancel?: () => void;
   } | null>(null);
 
+  console.log("[App Render] Module:", activeModule, "Room:", currentRoomId, "Spec:", isSpectator);
+
   const closeModal = () => setModalConfig(prev => prev ? { ...prev, isOpen: false } : null);
 
   // Reconnection Logic
@@ -121,7 +124,7 @@ export default function App() {
     if (user) {
       const checkActiveRoom = async () => {
         try {
-          const res = await fetch(`http://127.0.0.1:3001/api/rooms/active?email=${user.email}`);
+          const res = await fetch(`${API_BASE}/rooms/active?email=${user.email}`);
           if (res.ok) {
             const roomData = await res.json();
             if (roomData) {
@@ -130,10 +133,10 @@ export default function App() {
                 setCurrentRoomId(roomData.id);
                 const isSpec = roomData.spectator1_email === user.email || roomData.spectator2_email === user.email;
                 setIsSpectator(isSpec);
-                setActiveModule(roomData.status === 'DUELING' ? 'TEST' : 'DUEL_RPS');
+                setActiveModule(roomData.status === 'DUELING' ? 'DUEL_BOARD' : 'DUEL_RPS');
               } else if (roomData.status === 'LOBBY') {
                 // AUTO-LEAVE ON REFRESH (as requested)
-                await fetch('http://127.0.0.1:3001/api/rooms/leave', {
+                await fetch(`${API_BASE}/rooms/leave`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ roomId: roomData.id, email: user.email })
@@ -152,7 +155,7 @@ export default function App() {
     if (user) {
       const interval = setInterval(async () => {
         try {
-          await fetch('http://127.0.0.1:3001/api/users/heartbeat', {
+          await fetch(`${API_BASE}/users/heartbeat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email: user.email })
@@ -168,13 +171,13 @@ export default function App() {
     if (!user) return;
 
     // Fetch Cards
-    fetch(`http://localhost:3001/api/cards?userEmail=${user.email}`)
+    fetch(`${API_BASE}/cards?userEmail=${user.email}`)
       .then(res => res.json())
       .then(data => setCollection(data))
       .catch(err => console.error("Failed to load collection:", err));
 
     // Fetch Decks
-    fetch(`http://localhost:3001/api/decks?userEmail=${user.email}`)
+    fetch(`${API_BASE}/decks?userEmail=${user.email}`)
       .then(res => res.json())
       .then(data => {
         setDecks(data);
@@ -186,7 +189,7 @@ export default function App() {
   const handleSaveCard = async (card: CardDefinition) => {
     if (!user) return;
     try {
-      const response = await fetch('http://localhost:3001/api/cards', {
+      const response = await fetch(`${API_BASE}/cards`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ card, userEmail: user.email })
@@ -220,7 +223,7 @@ export default function App() {
       variant: 'danger',
       onConfirm: async () => {
         try {
-          const response = await fetch(`http://localhost:3001/api/cards/${id}`, {
+          const response = await fetch(`${API_BASE}/cards/${id}`, {
             method: 'DELETE'
           });
           if (response.ok) {
@@ -267,7 +270,7 @@ export default function App() {
   const handleSaveDeck = async (deck: DeckDefinition) => {
     if (!user) return;
     try {
-      const response = await fetch('http://localhost:3001/api/decks', {
+      const response = await fetch(`${API_BASE}/decks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deck, userEmail: user.email })
@@ -300,7 +303,7 @@ export default function App() {
       variant: 'danger',
       onConfirm: async () => {
         try {
-          const response = await fetch(`http://localhost:3001/api/decks/${id}`, {
+          const response = await fetch(`${API_BASE}/decks/${id}`, {
             method: 'DELETE'
           });
 
@@ -343,7 +346,7 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="min-h-screen transition-all duration-500">
-        {activeModule !== 'HOME' && (
+        {activeModule !== 'HOME' && activeModule !== 'DUEL_BOARD' && (
           <header className="px-4 md:px-8 py-6 border-b border-slate-900 flex justify-between items-center bg-slate-950/50 backdrop-blur-xl sticky top-0 z-40">
             <div className="flex items-center gap-4">
               <button 
@@ -361,6 +364,7 @@ export default function App() {
                   {activeModule === 'BUILDER' && "Custom Card Builder"}
                   {activeModule === 'DECK' && "Deck Management"}
                   {activeModule === 'TEST' && "Simulation Sandbox"}
+                  {activeModule === 'DUEL_BOARD' && "Active Combat"}
                 </h1>
                 <p className="text-slate-500 text-xs uppercase tracking-widest font-semibold mt-0.5">
                   DreamsTCG Engine v0.1
@@ -370,7 +374,7 @@ export default function App() {
             
             <div className="flex items-center gap-4">
                <div className="px-3 py-1 bg-slate-900 border border-slate-800 rounded-full text-xs font-mono text-slate-400">
-                 Collection: {collection.length} Cards
+                 {activeModule === 'DUEL_BOARD' ? `Duel: ${currentRoomId}` : `Collection: ${collection.length} Cards`}
                </div>
             </div>
           </header>
@@ -409,7 +413,7 @@ export default function App() {
               hasUnsavedChanges={isDeckDirty(activeDeck)}
             />
           )}
-          {activeModule === 'TEST' && currentRoomId && (
+          {(activeModule === 'TEST' || activeModule === 'DUEL_BOARD') && currentRoomId && (
             <DuelBoard 
               cards={collection}
               decks={decks}
@@ -443,8 +447,17 @@ export default function App() {
               roomId={currentRoomId}
               userEmail={user.email}
               isSpectator={isSpectator}
-              onFinished={() => setActiveModule('TEST')}
+              onFinished={(goFirst) => {
+                console.log("RPS Finished, transitioning to DUEL_BOARD. Room:", currentRoomId);
+                setActiveModule('DUEL_BOARD');
+              }}
             />
+          )}
+          {/* Debug Fallback */}
+          {activeModule === 'DUEL_BOARD' && !currentRoomId && (
+            <div className="fixed inset-0 bg-red-900 flex items-center justify-center text-white font-black z-[9999]">
+              ERROR: DUEL_BOARD active but currentRoomId is NULL
+            </div>
           )}
         </section>
       </main>

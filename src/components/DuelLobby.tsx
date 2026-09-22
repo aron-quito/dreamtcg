@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Zap
 } from 'lucide-react';
+import { API_BASE } from '../config';
 
 interface RoomData {
   id: string;
@@ -51,8 +52,8 @@ export function DuelLobby({ userEmail, onRoomCreated, onRoomJoined, onBack }: Du
     setIsLoadingRooms(true);
     try {
       const [roomsRes, onlineRes] = await Promise.all([
-        fetch('http://127.0.0.1:3001/api/rooms'),
-        fetch('http://127.0.0.1:3001/api/users/online')
+        fetch(`${API_BASE}/rooms`),
+        fetch(`${API_BASE}/users/online`)
       ]);
 
       if (roomsRes.ok) {
@@ -82,7 +83,7 @@ export function DuelLobby({ userEmail, onRoomCreated, onRoomJoined, onBack }: Du
   const handleCreateRoom = async () => {
     setIsCreating(true);
     try {
-      const response = await fetch('http://127.0.0.1:3001/api/rooms/host', {
+      const response = await fetch(`${API_BASE}/rooms/host`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: userEmail })
@@ -109,7 +110,7 @@ export function DuelLobby({ userEmail, onRoomCreated, onRoomJoined, onBack }: Du
     if (!id) return;
     setIsJoining(true);
     try {
-      const endpoint = asSpectator ? 'http://127.0.0.1:3001/api/rooms/spectate' : 'http://127.0.0.1:3001/api/rooms/join';
+      const endpoint = asSpectator ? `${API_BASE}/rooms/spectate` : `${API_BASE}/rooms/join`;
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

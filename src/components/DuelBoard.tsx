@@ -29,9 +29,13 @@ import {
   TriggerType,
   DeckDefinition,
   PlayerState,
-  GamePhase
+  GamePhase,
+  CardEffect
 } from '../types';
-import { CardEngine } from '../engine/controller';
+import { API_BASE } from '../config';
+import { EffectEngine, resetTurnTracking } from '../engine';
+import type { SyncedGameState } from '../engine';
+
 import { 
   Card, 
   renderTriggerText, 
@@ -86,11 +90,8 @@ interface DuelBoardProps {
   onExit: () => void;
 }
 
-// We extend GameState locally to include logs for synchronization
-interface SyncedGameState extends GameState {
-  logs?: Array<{ id: number; msg: string; type: string }>;
-  winnerEmail?: string | null;
-}
+// SyncedGameState is imported from the engine barrel — no redeclaration needed.
+
 
 export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, userEmail, isSpectator, onExit }) => {
   // --- SYNC STATE ---
@@ -115,6 +116,13 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
   const [selectedTributes, setSelectedTributes] = useState<string[]>([]);
   const [isCostConfirmed, setIsCostConfirmed] = useState(false);
   const [viewingZone, setViewingZone] = useState<{ playerIndex: number; location: 'GY' | 'REMOVED' } | null>(null);
+  const [engineSelectionPrompt, setEngineSelectionPrompt] = useState<{
+    options: string[];
+    count: number;
+    message: string;
+    resolve: (selectedIds: string[]) => void;
+  } | null>(null);
+  const [selectedEngineOptions, setSelectedEngineOptions] = useState<string[]>([]);
   
   // --- BATTLE STATES ---
   const [attackingInstanceId, setAttackingInstanceId] = useState<string | null>(null);
@@ -128,6 +136,13 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
   
   const lastActionTimeRef = useRef<number>(0);
   const isInitRef = useRef(false);
+  const [resolvingCardId, setResolvingCardId] = useState<string | null>(null);
+  const engineRef = useRef<EffectEngine>(new EffectEngine(cards as CardDefinition[]));
+
+  // Initialize engine whenever cards change
+  useEffect(() => {
+    engineRef.current = new EffectEngine(cards as CardDefinition[]);
+  }, [cards]);
 
   // PERSPECTIVE
   const isOwner = room?.host_email === userEmail;
@@ -160,7 +175,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
   const updateServerGame = async (nextState: SyncedGameState) => {
     lastActionTimeRef.current = Date.now();
     try {
-      await fetch('http://127.0.0.1:3001/api/rooms/game/update', {
+      await fetch(`${API_BASE}/rooms/game/update`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId, gameState: nextState, email: userEmail })
@@ -168,12 +183,16 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     } catch (e) {}
   };
 
+  const pushLog = (g: SyncedGameState, msg: string, type: string = 'info') => {
+    if (!g.logs) g.logs = [];
+    g.logs.push({ id: Date.now() + Math.random(), msg: msg, type });
+    if (g.logs.length > 40) g.logs.shift();
+  };
+
   const addSyncedLog = (msg: string, type: string = 'info') => {
     if (!game) return;
     const nextGame = JSON.parse(JSON.stringify(game)) as SyncedGameState;
-    if (!nextGame.logs) nextGame.logs = [];
-    nextGame.logs.push({ id: Date.now(), msg, type });
-    if (nextGame.logs.length > 20) nextGame.logs.shift();
+    pushLog(nextGame, msg, type);
     setGame(nextGame);
     updateServerGame(nextGame);
   };
@@ -188,60 +207,103 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
   useEffect(() => {
     const fetchRoom = async () => {
       try {
-        const response = await fetch(`http://127.0.0.1:3001/api/rooms/${roomId}`);
+        const response = await fetch(`${API_BASE}/rooms/${roomId}`);
         if (response.ok) {
           const data = await response.json();
           setRoom(data);
 
           if (data.game_state) {
-            const nextGame = JSON.parse(data.game_state) as SyncedGameState;
-            
-            // Ignore server sync if we just made a local action (2 sec grace period)
-            if (Date.now() - lastActionTimeRef.current < 2500) return;
+            try {
+              const nextGame = JSON.parse(data.game_state) as SyncedGameState;
+              
+              // Ignore server sync if we just made a local action (2 sec grace period)
+              if (Date.now() - lastActionTimeRef.current < 2500) return;
 
-            setGame(nextGame);
+              setGame(nextGame);
 
-            // Sync Duel Result (Robust detection)
-            if (nextGame.winnerEmail) {
-              if (isSpectator) {
-                // Find winner name
-                const winner = nextGame.players.find(p => p.email?.toLowerCase().trim() === nextGame.winnerEmail?.toLowerCase().trim());
-                setDuelResult(winner ? `VICTORY: ${winner.name}` : 'DUEL FINISHED');
-              } else if (userEmail) {
-                const isWinner = nextGame.winnerEmail.toLowerCase().trim() === userEmail.toLowerCase().trim();
-                setDuelResult(isWinner ? 'VICTORY' : 'DEFEAT');
+              // Sync Duel Result
+              if (nextGame.winnerEmail) {
+                if (isSpectator) {
+                  const winner = nextGame.players.find(p => p.email?.toLowerCase().trim() === nextGame.winnerEmail?.toLowerCase().trim());
+                  setDuelResult(winner ? `VICTORY: ${winner.name}` : 'DUEL FINISHED');
+                } else if (userEmail) {
+                  const isWinner = nextGame.winnerEmail.toLowerCase().trim() === userEmail.toLowerCase().trim();
+                  setDuelResult(isWinner ? 'VICTORY' : 'DEFEAT');
+                }
               }
+            } catch (err) {
+              console.error("Failed to parse game state:", err, data.game_state);
             }
           } else if (data.host_email === userEmail && !isInitRef.current) {
             isInitRef.current = true;
-            
+            console.log("Host initializing game state...");
             // FILTRAR CARTAS QUE NO EXISTEN EN LA COLECCION
             const filterDeck = (deckId: string | null) => {
               const deck = decks.find(d => d.id === deckId);
               if (!deck) return [];
-              return deck.mainCards.filter(cid => cards.some(c => c.id === cid));
+              return deck.mainCards.map(id => {
+                 const def = cards.find(c => c.id === id);
+                 return def ? `${def.id}_${Math.random().toString(36).substr(2, 9)}` : null;
+              }).filter(Boolean) as string[];
             };
 
-            const hostCards = filterDeck(data.host_deck_id);
-            const guestCards = filterDeck(data.guest_deck_id);
-            
+            // Draw initial hands (4 cards)
+            const p1Deck = filterDeck(data.host_deck_id);
+            const p2Deck = filterDeck(data.guest_deck_id);
+            const p1Hand = p1Deck.splice(0, 4);
+            const p2Hand = p2Deck.splice(0, 4);
+
             const initialGame: SyncedGameState = {
-              players: [
-                createPlayerState('p1', data.p1_name || 'Player 1', data.player1_email, hostCards),
-                createPlayerState('p2', data.p2_name || 'Player 2', data.player2_email, guestCards)
-              ],
               turn: 1,
-              phase: GamePhase.MAIN,
               activePlayerIndex: data.turn_order || 0,
               firstPlayerIndex: data.turn_order || 0,
+              phase: GamePhase.MAIN, // Start in MAIN for turn 1
               chain: [],
-              logs: [{ id: Date.now(), msg: "Duel Started", type: 'system' }]
+              logs: [{ id: Date.now(), msg: 'Duel Started!', type: 'system' }],
+              players: [
+                {
+                  id: 'p1',
+                  name: data.p1_name || 'Player 1',
+                  email: data.player1_email,
+                  lp: 2000,
+                  deck: p1Deck,
+                  hand: p1Hand,
+                  monsterZones: Array(3).fill(null),
+                  spellZones: Array(3).fill(null),
+                  cardPositions: {},
+                  cardVisibilities: {},
+                  gy: [],
+                  removed: [],
+                  extraDeck: [],
+                  attacksMade: {},
+                  negatedInstances: []
+                },
+                {
+                  id: 'p2',
+                  name: data.p2_name || 'Player 2',
+                  email: data.player2_email,
+                  lp: 2000,
+                  deck: p2Deck,
+                  hand: p2Hand,
+                  monsterZones: Array(3).fill(null),
+                  spellZones: Array(3).fill(null),
+                  cardPositions: {},
+                  cardVisibilities: {},
+                  gy: [],
+                  removed: [],
+                  extraDeck: [],
+                  attacksMade: {},
+                  negatedInstances: []
+                }
+              ]
             };
             await updateServerGame(initialGame);
             setGame(initialGame);
           }
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error("Sync loop error:", e);
+      }
     };
 
     const interval = setInterval(fetchRoom, 2000);
@@ -281,7 +343,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
       case GamePhase.DREAM: next = GamePhase.DRAW; break;
       case GamePhase.DRAW: next = GamePhase.MAIN; break;
       case GamePhase.MAIN: 
-        // Only the very first turn of the entire duel (Turn 1) skips the Battle Phase
+        // Skip Battle Phase on the very first turn of the duel (Turn 1)
         if (nextGame.turn === 1) {
           next = GamePhase.END;
         } else {
@@ -293,27 +355,29 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
         next = GamePhase.DREAM;
         nextGame.activePlayerIndex = nextGame.activePlayerIndex === 0 ? 1 : 0;
         nextGame.turn++; // Increment turn on every player change
-        // Reset attacks for the new active player
+        // Reset attacks and engine turn-frequency tracking
         nextGame.players[nextGame.activePlayerIndex].attacksMade = {};
+        resetTurnTracking();
         break;
       default: next = GamePhase.DREAM;
     }
+
     nextGame.phase = next;
     
     if (next === GamePhase.DRAW) {
       const p = nextGame.players[nextGame.activePlayerIndex];
       if (p.deck.length > 0) {
-        p.hand.push(p.deck.pop()!);
+        const drawnId = p.deck.pop()!;
+        p.hand.push(drawnId);
+        pushLog(nextGame, `${p.name} drew a card.`, 'system');
       } else {
         // Deck Out!
         nextGame.winnerEmail = nextGame.players[nextGame.activePlayerIndex === 0 ? 1 : 0].email;
-        if (!nextGame.logs) nextGame.logs = [];
-        nextGame.logs.push({ id: Date.now(), msg: `${p.name} has no cards left in deck! DECK OUT!`, type: 'system' });
+        pushLog(nextGame, `${p.name} has no cards left in deck! DECK OUT!`, 'combat');
       }
     }
 
-    if (!nextGame.logs) nextGame.logs = [];
-    nextGame.logs.push({ id: Date.now(), msg: `Phase: ${next}`, type: 'system' });
+    pushLog(nextGame, `Phase: ${next}`, 'system');
 
     setGame(nextGame);
     updateServerGame(nextGame);
@@ -332,7 +396,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     ) ?? false;
   };
 
-  const placeCard = (zoneType: 'MONSTER' | 'SPELL', slotIndex: number, tributeIds: string[] = [], isNegated: boolean = false) => {
+  const placeCard = async (zoneType: 'MONSTER' | 'SPELL', slotIndex: number, tributeIds: string[] = [], isNegated: boolean = false) => {
     if (!isMyTurn || !game || !summoningMode || !me) return;
     const nextGame = JSON.parse(JSON.stringify(game)) as SyncedGameState;
     const p = nextGame.players[myIndex];
@@ -378,15 +442,49 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     const discardedNames = tributeIds.map(tid => getCardDefByInstance(tid)?.name).filter(Boolean).join(", ");
     const tributeText = tributeIds.length > 0 ? ` (Discarded: ${discardedNames})` : (isNegated ? ' (Free: Attribute Match)' : '');
     
-    if (!nextGame.logs) nextGame.logs = [];
-    nextGame.logs.push({ 
-      id: Date.now(), 
-      msg: `${p.name} ${summoningMode.type === 'SUMMON' ? 'Summoned' : 'Set'} ${cardDef?.name}${tributeText}${isNegated ? ' [NEGATED]' : ''}`, 
-      type: 'action' 
-    });
+    const actionMsg = `${p.name} ${summoningMode.type === 'SUMMON' ? 'Summoned' : (summoningMode.type === 'ACTIVATE' ? 'Activated' : 'Set')} ${cardDef?.name}${tributeText}${isNegated ? ' [NEGATED]' : ''}`;
+    
+    // Emit Engine Events (Activation/Summon)
+    if (engineRef.current && (summoningMode.type === 'SUMMON' || summoningMode.type === 'ACTIVATE')) {
+      const trigger = summoningMode.type === 'ACTIVATE' ? TriggerType.ON_ACTIVATION : TriggerType.ON_SUMMON;
+      const instanceId = summoningMode.instanceId;
+      const cardDef = getCardDefByInstance(instanceId);
+      
+      // Visual feedback
+      // setResolvingCardId(instanceId); // TEMPORARILY DISABLED
+      
+      // We do the logic and then clear the animation
+      (async () => {
+        try {
+          const finalGame = await engineRef.current.emit(
+            trigger,
+            { instanceId, controllerIndex: myIndex, cardName: cardDef?.name },
+            nextGame,
+            () => {}, // Simplified
+            'hand',
+            (options, count, message) => {
+              return new Promise<string[]>((resolve) => {
+                setEngineSelectionPrompt({ options, count, message, resolve });
+                setSelectedEngineOptions([]);
+              });
+            }
+          );
+          
+          setGame(finalGame);
+          updateServerGame(finalGame);
+        } catch (err) {
+          console.error("Logic Error:", err);
+        } finally {
+          // Keep the animation for a bit for the user to see, but logic is done
+          setTimeout(() => setResolvingCardId(null), 1200);
+        }
+      })();
 
-    setGame(nextGame);
-    updateServerGame(nextGame);
+    } else {
+      setGame(nextGame);
+      updateServerGame(nextGame);
+    }
+
     setSummoningMode(null);
     setTributeModal(null);
     setSelectedTributes([]);
@@ -424,8 +522,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
       // REVEAL IF FACE DOWN
       if (oppState.cardVisibilities[targetId] === 'FACE_DOWN') {
         oppState.cardVisibilities[targetId] = 'FACE_UP';
-        if (!nextGame.logs) nextGame.logs = [];
-        nextGame.logs.push({ id: Date.now(), msg: `Set monster revealed: ${targetDef?.name}`, type: 'system' });
+        pushLog(nextGame, `Set monster revealed: ${targetDef?.name}`, 'system');
       }
       
       if (targetPos === 'ATTACK') {
@@ -463,18 +560,39 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
       }
     }
 
+    // LOG ATTACK
+    const targetName = targetId === 'DIRECT' ? 'Direct Attack' : getCardDefByInstance(targetId)?.name;
+    pushLog(nextGame, `${attackerDef.name} attacks ${targetName}!`, 'combat');
+    if (damage > 0) {
+      pushLog(nextGame, `${damage} damage dealt!`, 'combat');
+    }
+
     myState.attacksMade[attackerId] = attacksMade + 1;
     setBattleAnim({ attackerId, targetId, damage, result });
     
     setAttackingInstanceId(null);
     updateServerGame(nextGame);
 
+    // Emit ON_ATTACK so any reactive card effects can trigger
+    if (engineRef.current) {
+      await engineRef.current.emit(
+        TriggerType.ON_ATTACK,
+        { attackerId, targetId, damage, result, controllerIndex: myIndex },
+        nextGame,
+        (events) => {
+          const last = events[events.length - 1];
+          if (last) {
+            updateServerGame(last.nextState);
+          }
+        }
+      );
+    }
+
     // DELAY VICTORY/DEFEAT SCREEN TO ALLOW ANIMATION TO PLAY
     setTimeout(() => {
       setBattleAnim(null);
       if (oppState.lp <= 0) {
         setDuelResult('VICTORY');
-        // Update winner on server
         const winGame = JSON.parse(JSON.stringify(nextGame)) as SyncedGameState;
         winGame.winnerEmail = me.email;
         updateServerGame(winGame);
@@ -485,6 +603,26 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
         updateServerGame(loseGame);
       }
     }, 2000);
+  };
+
+  const passPriority = async () => {
+    if (!game || !game.waitingForResponse || game.responderEmail !== userEmail) return;
+    const nextGame = JSON.parse(JSON.stringify(game)) as SyncedGameState;
+    
+    if (engineRef.current) {
+      await engineRef.current.emit(
+        TriggerType.ANY_TIME, 
+        { instanceId: 'PASS', controllerIndex: myIndex },
+        nextGame,
+        (events) => {
+          const lastEvent = events[events.length - 1];
+          if (lastEvent) {
+             setGame(lastEvent.nextState);
+             updateServerGame(lastEvent.nextState);
+          }
+        }
+      );
+    }
   };
 
   const handleCardClick = (instanceId: string) => {
@@ -690,6 +828,21 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
               <div className="absolute inset-0 ring-4 ring-red-500 ring-offset-4 ring-offset-slate-950 rounded-2xl animate-pulse z-40" />
             )}
 
+            {/* Activate Button for Spells on Field */}
+            {instanceId && isPlayer && game.phase === GamePhase.MAIN && game.activePlayerIndex === myIndex && type === 'SPELL' && instanceId === selectedHandInstanceId && (
+              <button 
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  setSummoningMode({ type: 'ACTIVATE', instanceId }); 
+                  setSelectedHandInstanceId(null);
+                }}
+                className="absolute -top-14 left-1/2 -translate-x-1/2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl shadow-[0_10px_20px_rgba(16,185,129,0.4)] transition-all z-[60] flex items-center gap-2 group animate-bounce"
+              >
+                <Flame className="w-4 h-4" />
+                <span className="tracking-tighter uppercase italic">Activate</span>
+              </button>
+            )}
+
             {attackingInstanceId && !isPlayer && type === 'MONSTER' && instanceId && (
               <div className="absolute inset-0 bg-red-500/10 border-4 border-red-500/40 rounded-2xl animate-pulse z-40 cursor-crosshair">
                  <div className="absolute inset-0 flex items-center justify-center">
@@ -702,6 +855,32 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
       </div>
     );
   };
+
+  if (!game || !me || !opponent) {
+    return (
+      <div className="fixed inset-0 bg-slate-950 flex items-center justify-center z-[1000]">
+         <div className="flex flex-col items-center gap-6">
+            <Loader2 className="w-12 h-12 text-indigo-500 animate-spin" />
+            <h2 className="text-xl font-black italic tracking-[0.3em] text-white animate-pulse uppercase">Syncing Duel Matrix...</h2>
+            <p className="text-slate-500 text-[10px] uppercase tracking-widest text-center px-10">
+              Room: {roomId} | Game: {!!game ? "READY" : "WAITING"}
+            </p>
+            <p className="text-indigo-500/50 text-[9px] font-mono text-center">
+              P1: {room?.p1_name || "???"} ({room?.player1_email === userEmail ? "YOU" : "GUEST"})<br/>
+              P2: {room?.p2_name || "???"} ({room?.player2_email === userEmail ? "YOU" : "GUEST"})<br/>
+              Status: {room?.status || "FETCHING..."} | Me: {myIndex}<br/>
+              API: {API_BASE}
+            </p>
+            <button 
+              onClick={onExit}
+              className="mt-8 px-6 py-2 bg-slate-800 text-slate-400 rounded-full text-[8px] font-black uppercase tracking-widest hover:text-white transition-colors"
+            >
+              Force Exit (Connection Lost)
+            </button>
+         </div>
+      </div>
+    );
+  }
 
   return (
     <div 
@@ -955,7 +1134,12 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                          {attrMatch && !normalSummonForbidden && (
                            <button onClick={(e)=>{e.stopPropagation();setSummoningMode({type:'SUMMON',instanceId,isNegated:true});setSelectedHandInstanceId(null);}} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-amber-600 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-amber-500 transition-colors shadow-amber-500/20 animate-pulse"><Sparkles className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded whitespace-nowrap">Free Match</span></button>
                          )}
-<button onClick={(e)=>{e.stopPropagation();if(!canAffordTribute)return;if(tributesNeeded===0){setSummoningMode({type:'SET',instanceId});}else{setSummoningMode({type:'SET',instanceId});setTributeModal({instanceId,required:tributesNeeded});setSelectedTributes([]);setSelectedHandInstanceId(null);}}} disabled={!canAffordTribute} className={`flex flex-col items-center gap-1 group/btn ${!canAffordTribute?'opacity-40 cursor-not-allowed':''}`}><div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-colors ${canAffordTribute?'bg-slate-700 group-hover/btn:bg-slate-600':'bg-slate-800'}`}><Shield className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Set</span></button></>):(<button onClick={(e)=>{e.stopPropagation();setSummoningMode({type:'ACTIVATE',instanceId});}} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-emerald-600 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-emerald-500 transition-colors"><Flame className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Activate</span></button>)}
+<button onClick={(e)=>{e.stopPropagation();if(!canAffordTribute)return;if(tributesNeeded===0){setSummoningMode({type:'SET',instanceId});}else{setSummoningMode({type:'SET',instanceId});setTributeModal({instanceId,required:tributesNeeded});setSelectedTributes([]);setSelectedHandInstanceId(null);}}} disabled={!canAffordTribute} className={`flex flex-col items-center gap-1 group/btn ${!canAffordTribute?'opacity-40 cursor-not-allowed':''}`}><div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-colors ${canAffordTribute?'bg-slate-700 group-hover/btn:bg-slate-600':'bg-slate-800'}`}><Shield className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Set</span></button></>):(<>
+  <button onClick={(e)=>{e.stopPropagation();setSummoningMode({type:'SET',instanceId});setSelectedHandInstanceId(null);}} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-slate-700 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-slate-600 transition-colors"><Shield className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Set</span></button>
+  {def?.effects?.some(eff => eff.restriction.locations.includes("HAND")) && (
+    <button onClick={(e)=>{e.stopPropagation();setSummoningMode({type:'ACTIVATE',instanceId});}} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-emerald-600 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-emerald-500 transition-colors"><Flame className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Activate</span></button>
+  )}
+</>)}
                        </motion.div>
                        );
                      })()}
@@ -1112,7 +1296,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                   <button 
                     onClick={async () => {
                       try {
-                        await fetch('http://127.0.0.1:3001/api/rooms/leave', {
+                        await fetch(`${API_BASE}/rooms/leave`, {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ roomId, email: userEmail })
@@ -1182,7 +1366,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                    <button 
                      onClick={async () => {
                        try {
-                         await fetch('http://127.0.0.1:3001/api/rooms/leave', {
+                         await fetch(`${API_BASE}/rooms/leave`, {
                            method: 'POST',
                            headers: { 'Content-Type': 'application/json' },
                            body: JSON.stringify({ roomId, email: userEmail })
@@ -1277,6 +1461,141 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                 ✓ Cost Paid — Select a Monster Zone to Summon
               </motion.p>
             )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ENGINE SELECTION OVERLAY */}
+      <AnimatePresence>
+        {engineSelectionPrompt && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[900] bg-slate-950/90 backdrop-blur-sm flex flex-col font-sans select-none"
+          >
+            <div className="absolute top-0 left-0 w-full p-8 text-center bg-gradient-to-b from-slate-900 to-transparent">
+               <h2 className="text-3xl font-black text-white uppercase tracking-tighter drop-shadow-lg mb-2">Engine Prompt</h2>
+               <p className="text-slate-300 uppercase tracking-widest text-sm font-bold flex items-center justify-center gap-3">
+                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+                  {engineSelectionPrompt.message}
+               </p>
+               <div className="mt-4 text-[10px] font-black text-cyan-400 uppercase tracking-widest">
+                  Selected: {selectedEngineOptions.length} / {engineSelectionPrompt.count}
+               </div>
+            </div>
+
+            <div className="flex-1 flex flex-wrap items-center justify-center gap-4 p-12 mt-20 content-start custom-scrollbar overflow-y-auto">
+               {engineSelectionPrompt.options.map((instanceId, i) => {
+                 const def = getCardDefByInstance(instanceId);
+                 const isSelected = selectedEngineOptions.includes(instanceId);
+                 return (
+                   <motion.div 
+                     key={instanceId}
+                     initial={{ opacity: 0, y: 20 }}
+                     animate={{ opacity: 1, y: 0 }}
+                     transition={{ delay: i * 0.05 }}
+                     onClick={() => {
+                        if (isSelected) {
+                          setSelectedEngineOptions(prev => prev.filter(id => id !== instanceId));
+                        } else if (selectedEngineOptions.length < engineSelectionPrompt.count) {
+                          setSelectedEngineOptions(prev => [...prev, instanceId]);
+                        }
+                     }}
+                     className={`cursor-pointer transition-all duration-200 w-[180px] rounded-xl overflow-hidden border-2
+                       ${isSelected ? 'border-cyan-400 shadow-[0_0_30px_rgba(34,211,238,0.5)] scale-105 z-10' : 'border-slate-700/50 hover:border-slate-500 opacity-80 hover:opacity-100'}
+                     `}
+                   >
+                     <Card instanceId={instanceId} def={def!} isMe={true} location="DECK" />
+                   </motion.div>
+                 );
+               })}
+            </div>
+
+            <div className="absolute bottom-12 left-1/2 -translate-x-1/2">
+               <button 
+                 onClick={() => {
+                   if (selectedEngineOptions.length === engineSelectionPrompt.count) {
+                     engineSelectionPrompt.resolve(selectedEngineOptions);
+                     setEngineSelectionPrompt(null);
+                     setSelectedEngineOptions([]);
+                   }
+                 }}
+                 disabled={selectedEngineOptions.length !== engineSelectionPrompt.count}
+                 className={`px-12 py-4 rounded-full font-black uppercase tracking-widest transition-all
+                   ${selectedEngineOptions.length === engineSelectionPrompt.count 
+                     ? 'bg-cyan-500 hover:bg-cyan-400 text-white shadow-[0_0_40px_rgba(34,211,238,0.4)] scale-110' 
+                     : 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-50'}`}
+               >
+                 Confirm Selection
+               </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* MASTER DUEL ACTIVATION HIGHLIGHT */}
+      <AnimatePresence>
+        {resolvingCardId && getCardDefByInstance(resolvingCardId) && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.5, rotateY: 90 }}
+            animate={{ opacity: 1, scale: 1.2, rotateY: 0 }}
+            exit={{ opacity: 0, scale: 2, filter: 'blur(20px)' }}
+            className="fixed inset-0 z-[1000] flex items-center justify-center pointer-events-none"
+          >
+            <div className="relative">
+              <div className="absolute inset-0 bg-indigo-500/40 blur-[100px] animate-pulse rounded-full" />
+              <div className="relative transform-gpu shadow-[0_0_50px_rgba(99,102,241,0.5)] border-4 border-white/20 rounded-2xl overflow-hidden">
+                <Card 
+                  instanceId={resolvingCardId} 
+                  def={getCardDefByInstance(resolvingCardId)!} 
+                  isMe={true} 
+                  location="FIELD" 
+                />
+              </div>
+
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+                className="absolute -bottom-12 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md px-6 py-2 rounded-full border border-indigo-500/50"
+              >
+                <span className="text-white font-black uppercase tracking-[0.4em] text-xs">Activating</span>
+              </motion.div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* PRIORITY RESPONSE PROMPT */}
+      <AnimatePresence>
+        {game?.waitingForResponse && game.responderEmail === userEmail && (
+          <motion.div 
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className="fixed bottom-32 left-1/2 -translate-x-1/2 z-[800]"
+          >
+            <div className="bg-slate-900/90 backdrop-blur-2xl border-2 border-indigo-500 rounded-3xl px-8 py-6 shadow-[0_0_50px_rgba(79,70,229,0.3)] flex flex-col items-center gap-4">
+               <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 bg-indigo-500 rounded-full animate-ping" />
+                  <span className="text-white font-black uppercase tracking-widest text-xs">Response Opportunity</span>
+               </div>
+               <p className="text-slate-400 text-[10px] uppercase font-bold tracking-tighter">Do you want to chain an effect?</p>
+               <div className="flex gap-4 w-full">
+                  <button 
+                    onClick={passPriority}
+                    className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all"
+                  >
+                    Pass
+                  </button>
+                  <button 
+                    className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-lg shadow-indigo-900/40 transition-all animate-pulse"
+                  >
+                    Select Card
+                  </button>
+               </div>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

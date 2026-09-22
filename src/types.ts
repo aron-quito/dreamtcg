@@ -55,6 +55,8 @@ export enum FrequencyType {
 export interface Restriction {
   locations: CardLocation[];
   frequency: FrequencyType;
+  frequencyCount?: number; // Default 1
+  hardOncePerTurn?: boolean; // If true, applies to all copies by name
   mustBePosition?: "ATTACK" | "DEFENSE" | "FACE_UP" | "FACE_DOWN";
   summonRestriction?: "NONE" | "ONLY_SPECIAL" | "ONLY_NORMAL" | "CANNOT_SUMMON";
   customConditions?: string[]; // References to condition registry
