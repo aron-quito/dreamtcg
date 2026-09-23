@@ -1,8 +1,9 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { 
   Zap, 
   RefreshCw, 
   X,
+  Minus,
   Layers,
   Sword,
   Shield,
@@ -11,6 +12,7 @@ import {
   Clock,
   ArrowRight,
   Maximize2,
+  Minimize2,
   Search,
   History,
   Trash2,
@@ -19,22 +21,25 @@ import {
   ChevronRight,
   Flame,
   Package,
-  Star
+  Star,
+  CloudRain
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   GameState, 
-  CardDefinition, 
   CardType,
   TriggerType,
   DeckDefinition,
   PlayerState,
   GamePhase,
-  CardEffect
+  CardEffect,
+  CardLocation
 } from '../types';
 import { API_BASE } from '../config';
-import { EffectEngine, resetTurnTracking } from '../engine';
-import type { SyncedGameState } from '../engine';
+import { CardDefinition } from '../types';
+import { EffectEngine, resetTurnTracking } from '../engine/engine';
+import { CardRegistry } from '../engine/scripts/registry';
+import { SyncedGameState } from '../engine/types';
 
 import { 
   Card, 
@@ -103,7 +108,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
   const [selectedHandInstanceId, setSelectedHandInstanceId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<'SUMMON' | 'SET' | null>(null);
   const [selectedHandCardId, setSelectedHandCardId] = useState<string | null>(null);
-  const [summoningMode, setSummoningMode] = useState<{ type: 'SUMMON' | 'SET' | 'ACTIVATE', instanceId: string, isNegated?: boolean } | null>(null);
+  const [summoningMode, setSummoningMode] = useState<{ type: 'SUMMON' | 'SET' | 'ACTIVATE', instanceId: string, isNegated?: boolean, isDreamSummon?: boolean } | null>(null);
   const [inspectedInstanceId, setInspectedInstanceId] = useState<string | null>(null);
   const [isLogsPanelOpen, setIsLogsPanelOpen] = useState(false);
   const [isCardPopupOpen, setIsCardPopupOpen] = useState(false);
@@ -123,6 +128,8 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     resolve: (selectedIds: string[]) => void;
   } | null>(null);
   const [selectedEngineOptions, setSelectedEngineOptions] = useState<string[]>([]);
+  const [isSelectionMinimized, setIsSelectionMinimized] = useState(false);
+  const [isZoneViewerMinimized, setIsZoneViewerMinimized] = useState(false);
   
   // --- BATTLE STATES ---
   const [attackingInstanceId, setAttackingInstanceId] = useState<string | null>(null);
@@ -132,6 +139,21 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     targetId: string | 'DIRECT'; 
     damage: number; 
     result: 'DESTROYED' | 'SURVIVED' | 'DIRECT' 
+  } | null>(null);
+
+  // --- CHAIN ANIMATION STATES ---
+  const [selectedPriorityItem, setSelectedPriorityItem] = useState<{ instanceId: string; effectId: string } | null>(null);
+  const [isPriorityMinimized, setIsPriorityMinimized] = useState(false);
+  const [chainBuildAnim, setChainBuildAnim] = useState<{ 
+    instanceId: string; 
+    chainNumber: number; 
+    cardName: string; 
+    playerName: string 
+  } | null>(null);
+  const [chainResolutionAnim, setChainResolutionAnim] = useState<{
+    links: Array<{ instanceId: string; cardName: string; chainNumber: number; playerName: string; effectName: string }>;
+    currentIndex: number;
+    phase: 'OVERVIEW' | 'RESOLVING' | 'DONE';
   } | null>(null);
   
   const lastActionTimeRef = useRef<number>(0);
@@ -159,7 +181,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
 
   const getCardDefByInstance = useCallback((instanceId: string | null) => {
     if (!instanceId) return null;
-    const cardId = instanceId.split('_')[0];
+    const cardId = instanceId.substring(0, instanceId.lastIndexOf('_'));
     return cards.find(c => c.id === cardId) || null;
   }, [cards]);
 
@@ -237,19 +259,31 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
           } else if (data.host_email === userEmail && !isInitRef.current) {
             isInitRef.current = true;
             console.log("Host initializing game state...");
-            // FILTRAR CARTAS QUE NO EXISTEN EN LA COLECCION
-            const filterDeck = (deckId: string | null) => {
-              const deck = decks.find(d => d.id === deckId);
+            
+            // Fetch both players' decks directly from the server
+            const fetchDecks = async (email: string) => {
+               try {
+                  const res = await fetch(`${API_BASE}/decks?userEmail=${email}`);
+                  if (res.ok) return await res.json();
+               } catch(e) {}
+               return [];
+            };
+            
+            const p1Decks = await fetchDecks(data.player1_email);
+            const p2Decks = await fetchDecks(data.player2_email);
+            
+            const filterDeck = (deckId: string | null, sourceDecks: any[]) => {
+              const deck = sourceDecks.find((d: any) => d.id === deckId);
               if (!deck) return [];
-              return deck.mainCards.map(id => {
+              return deck.mainCards.map((id: string) => {
                  const def = cards.find(c => c.id === id);
                  return def ? `${def.id}_${Math.random().toString(36).substr(2, 9)}` : null;
               }).filter(Boolean) as string[];
             };
 
             // Draw initial hands (4 cards)
-            const p1Deck = filterDeck(data.host_deck_id);
-            const p2Deck = filterDeck(data.guest_deck_id);
+            const p1Deck = filterDeck(data.host_deck_id, p1Decks);
+            const p2Deck = filterDeck(data.guest_deck_id, p2Decks);
             const p1Hand = p1Deck.splice(0, 4);
             const p2Hand = p2Deck.splice(0, 4);
 
@@ -257,7 +291,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
               turn: 1,
               activePlayerIndex: data.turn_order || 0,
               firstPlayerIndex: data.turn_order || 0,
-              phase: GamePhase.MAIN, // Start in MAIN for turn 1
+              phase: GamePhase.MAIN, // Start in MAIN for turn 1 (skip DREAM and DRAW)
               chain: [],
               logs: [{ id: Date.now(), msg: 'Duel Started!', type: 'system' }],
               players: [
@@ -331,7 +365,166 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     setSummoningMode(null);
   }, [game?.phase]);
 
+  // Pre-calculate valid cards to chain during priority window
+  const activatablePriorityInstances = useMemo(() => {
+    if (!game?.chainPriority || game.chainPriority.playerIndex !== myIndex || !me) return [];
+    const validInstances: { instanceId: string; effectId: string; location: 'HAND' | 'FIELD' | 'GY' }[] = [];
+    
+    const checkCard = (instanceId: string, location: 'HAND' | 'FIELD' | 'GY') => {
+       // Skip cards already in the pending chain (prevent duplicate activation)
+       if (game?.pendingChain?.some(link => link.instanceId === instanceId)) return;
+       // Skip cards that are negated
+       if (me.negatedInstances?.includes(instanceId)) return;
+       const def = getCardDefByInstance(instanceId);
+       if (!def) return;
+       const registryEffects = CardRegistry.getEffects(def.id);
+       const engineDef = engineRef.current?.getCardDef(def.id);
+       const fallbackEffects = Array.isArray(engineDef?.effects) ? engineDef.effects : [];
+       const activeEffects = registryEffects && registryEffects.length > 0 ? registryEffects : fallbackEffects;
+       
+       for (const eff of activeEffects) {
+          if (eff?.trigger?.type === TriggerType.ANY_TIME || eff?.trigger?.type === TriggerType.ON_ACTIVATION) {
+             const locs = eff?.restriction?.locations || [];
+             if (locs.length > 0) {
+                 const currentLocEnum = location === 'HAND' ? CardLocation.HAND :
+                                        location === 'FIELD' ? (def.type === 'MONSTER' ? CardLocation.MONSTER_ZONE : CardLocation.SPELL_ZONE) :
+                                        CardLocation.GY;
+                 if (!locs.includes(currentLocEnum as any)) continue;
+             }
+             
+             // Spells cannot be activated from hand on opponent's turn.
+             if (location === 'HAND' && def.type === 'SPELL') {
+                 if (!isMyTurn) continue;
+             }
+             validInstances.push({ instanceId, effectId: eff.id, location });
+             break; // one effect is enough to show the card
+          }
+       }
+    };
 
+    me.hand?.forEach(id => id && checkCard(id, 'HAND'));
+    me.monsterZones?.forEach(id => id && checkCard(id, 'FIELD'));
+    me.spellZones?.forEach(id => id && checkCard(id, 'FIELD'));
+    me.gy?.forEach(id => id && checkCard(id, 'GY'));
+
+    return validInstances;
+  }, [game?.chainPriority, myIndex, me, getCardDefByInstance, isMyTurn]);
+
+  // Ref to track last pass count so we don't clear selection on every poll
+  const lastPriorityStateRef = useRef<{ playerIndex: number; passCount: number; chainLength: number } | null>(null);
+
+  // Auto-pass priority if no activatable effects
+  useEffect(() => {
+    if (game?.chainPriority && !game.chainPriority.isResolving && game.chainPriority.playerIndex === myIndex) {
+      const currentPriorityState = {
+        playerIndex: game.chainPriority.playerIndex,
+        passCount: game.chainPriority.passCount,
+        chainLength: game.pendingChain?.length || 0
+      };
+
+      const lastState = lastPriorityStateRef.current;
+      const isNewPriorityWindow = !lastState || 
+        lastState.playerIndex !== currentPriorityState.playerIndex || 
+        lastState.passCount !== currentPriorityState.passCount ||
+        lastState.chainLength !== currentPriorityState.chainLength;
+
+      if (isNewPriorityWindow) {
+        // Clear any previous selection when priority window opens/updates
+        setSelectedPriorityItem(null);
+        lastPriorityStateRef.current = currentPriorityState;
+      }
+
+      if (activatablePriorityInstances.length === 0) {
+        const timer = setTimeout(() => {
+          passPriority();
+        }, 1200); // 1.2s delay to show what opponent activated
+        return () => clearTimeout(timer);
+      }
+    } else {
+      setSelectedPriorityItem(null);
+      lastPriorityStateRef.current = null;
+    }
+  }, [game?.chainPriority, game?.pendingChain?.length, myIndex, activatablePriorityInstances.length]);
+
+  // Step-by-Step Chain Resolution Engine
+  useEffect(() => {
+    if (!game?.chainPriority?.isResolving || !engineRef.current) return;
+    
+    // Check if it's our turn to resolve a link
+    if (game.chainPriority.playerIndex === myIndex) {
+      const resolveCurrentLink = async () => {
+        // If there are no links, just close the chain
+        if (!game.pendingChain || game.pendingChain.length === 0) {
+          const nextGame = await engineRef.current!.resolveNextLink(game);
+          updateServerGame(nextGame);
+          return;
+        }
+
+        const currentLinkIdx = game.pendingChain.length - 1;
+        const currentLink = game.pendingChain[currentLinkIdx];
+        const def = getCardDefByInstance(currentLink.instanceId);
+        
+        // Show the OVERVIEW animation first if this is the very first link we are resolving
+        // (We know it's the first if the chain length is the max it's been, but for simplicity
+        // let's just show the resolving badge per-link).
+        
+        // Setup the animation state for this specific link
+        setChainResolutionAnim({
+          links: [{
+            instanceId: currentLink.instanceId,
+            cardName: def?.name || 'Card',
+            chainNumber: currentLinkIdx + 1,
+            playerName: game.players[currentLink.controllerIndex]?.name || 'Player',
+            effectName: 'Effect' // Could extract from engine if needed
+          }],
+          currentIndex: 0,
+          phase: 'RESOLVING'
+        });
+
+        // Wait for animation
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        
+        // Clear animation
+        setChainResolutionAnim(null);
+
+        // Execute the link logic (this will trigger requestSelection if needed)
+        const nextGame = await engineRef.current!.resolveNextLink(
+          game,
+          (options, count, message) => {
+            return new Promise<string[]>((resolve) => {
+              setEngineSelectionPrompt({ options, count, message, resolve });
+              setSelectedEngineOptions([]);
+            });
+          }
+        );
+        
+        // Send state to server (this might pass resolving control to opponent)
+        updateServerGame(nextGame);
+      };
+
+      resolveCurrentLink();
+    }
+  }, [game?.chainPriority?.isResolving, game?.chainPriority?.playerIndex, game?.pendingChain?.length, myIndex]);
+
+  // RESUME PENDING ATTACK AFTER CHAIN
+  useEffect(() => {
+    if (!game) return;
+    
+    // Check if chain window is fully closed and we have a pending attack
+    if (!game.chainPriority && (!game.pendingChain || game.pendingChain.length === 0) && game.pendingAttack) {
+       // Only the attacking player resumes the attack to prevent duplicate updates
+       if (myIndex === game.activePlayerIndex) {
+         const nextGame = JSON.parse(JSON.stringify(game)) as SyncedGameState;
+         const attack = nextGame.pendingAttack!;
+         nextGame.pendingAttack = undefined; // clear immediately
+         
+         // Wait slightly for chain animations to finish before resolving combat
+         setTimeout(() => {
+            finalizeAttack(attack.attackerId, attack.targetId, nextGame);
+         }, 800);
+       }
+    }
+  }, [game?.chainPriority, game?.pendingChain?.length, game?.pendingAttack, myIndex, game?.activePlayerIndex]);
   // ACTIONS
   const nextPhase = () => {
     if (!isMyTurn || !game) return;
@@ -343,8 +536,9 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
       case GamePhase.DREAM: next = GamePhase.DRAW; break;
       case GamePhase.DRAW: next = GamePhase.MAIN; break;
       case GamePhase.MAIN: 
-        // Skip Battle Phase on the very first turn of the duel (Turn 1)
-        if (nextGame.turn === 1) {
+        // Skip Battle Phase on the very first turn, or if Dream Summon was used this turn
+        // Turn 1 skip Battle phase
+        if (nextGame.turn === 1 || nextGame.players[nextGame.activePlayerIndex].dreamSummonUsedThisTurn) {
           next = GamePhase.END;
         } else {
           next = GamePhase.BATTLE;
@@ -352,6 +546,24 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
         break;
       case GamePhase.BATTLE: next = GamePhase.END; break;
       case GamePhase.END: 
+        // Send Dream Summoned monster to GY if it still exists
+        const currentPlayer = nextGame.players[nextGame.activePlayerIndex];
+        if (currentPlayer.dreamSummonedInstanceId) {
+           const did = currentPlayer.dreamSummonedInstanceId;
+           const mzIdx = currentPlayer.monsterZones.indexOf(did);
+           if (mzIdx !== -1) {
+              currentPlayer.monsterZones[mzIdx] = null;
+              currentPlayer.gy.push(did);
+              pushLog(nextGame, `Dream Summoned monster was sent to GY.`, 'system');
+           }
+        }
+        // Reset player flags
+        nextGame.players.forEach(player => {
+          player.dreamSummonUsedThisTurn = false;
+          player.dreamSummonedInstanceId = null;
+          player.salvationUsedThisTurn = false;
+        });
+
         next = GamePhase.DREAM;
         nextGame.activePlayerIndex = nextGame.activePlayerIndex === 0 ? 1 : 0;
         nextGame.turn++; // Increment turn on every player change
@@ -366,14 +578,20 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     
     if (next === GamePhase.DRAW) {
       const p = nextGame.players[nextGame.activePlayerIndex];
-      if (p.deck.length > 0) {
-        const drawnId = p.deck.pop()!;
-        p.hand.push(drawnId);
-        pushLog(nextGame, `${p.name} drew a card.`, 'system');
+      // Skip drawing on Turn 1
+      if (nextGame.turn === 1) {
+        nextGame.phase = GamePhase.MAIN;
       } else {
-        // Deck Out!
-        nextGame.winnerEmail = nextGame.players[nextGame.activePlayerIndex === 0 ? 1 : 0].email;
-        pushLog(nextGame, `${p.name} has no cards left in deck! DECK OUT!`, 'combat');
+        if (p.deck.length > 0) {
+          const drawnId = p.deck.pop()!;
+          p.hand.push(drawnId);
+          pushLog(nextGame, `${p.name} drew a card.`, 'system');
+          nextGame.phase = GamePhase.MAIN;
+        } else {
+          // Deck Out!
+          nextGame.winnerEmail = nextGame.players[nextGame.activePlayerIndex === 0 ? 1 : 0].email;
+          pushLog(nextGame, `${p.name} has no cards left in deck! DECK OUT!`, 'combat');
+        }
       }
     }
 
@@ -430,12 +648,18 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
 
     p.hand.splice(hIdx, 1);
     zones[slotIndex] = summoningMode.instanceId;
-    p.cardPositions[summoningMode.instanceId] = summoningMode.type === 'SET' ? "DEFENSE" : "ATTACK";
+    const isMonster = getCardDefByInstance(summoningMode.instanceId)?.type === 'MONSTER';
+    p.cardPositions[summoningMode.instanceId] = (summoningMode.type === 'SET' && isMonster) ? "DEFENSE" : "ATTACK";
     p.cardVisibilities[summoningMode.instanceId] = summoningMode.type === 'SET' ? "FACE_DOWN" : "FACE_UP";
 
     if (isNegated) {
       p.negatedInstances = p.negatedInstances || [];
       p.negatedInstances.push(summoningMode.instanceId);
+    }
+    
+    if (summoningMode.isDreamSummon) {
+      p.dreamSummonUsedThisTurn = true;
+      p.dreamSummonedInstanceId = summoningMode.instanceId;
     }
 
     const cardDef = getCardDefByInstance(summoningMode.instanceId);
@@ -491,25 +715,26 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     setIsCostConfirmed(false);
   };
 
-  const executeAttack = async (attackerId: string, targetId: string | 'DIRECT') => {
-    if (!game || !me || !opponent) return;
-    
+  const finalizeAttack = async (attackerId: string, targetId: string | 'DIRECT', gameToMutate: SyncedGameState) => {
     const attackerDef = getCardDefByInstance(attackerId);
-    const nextGame = JSON.parse(JSON.stringify(game)) as SyncedGameState;
-    const myState = nextGame.players[myIndex];
-    const oppState = nextGame.players[oppIndex];
+    if (!attackerDef) return;
 
-    if (!myState.attacksMade) myState.attacksMade = {};
-    const attacksMade = myState.attacksMade[attackerId] || 0;
-    
-    // Default limit 1 for now
-    if (attacksMade >= 1) {
-       setAttackingInstanceId(null);
-       return;
-    }
+    const myState = gameToMutate.players[myIndex];
+    const oppState = gameToMutate.players[oppIndex];
 
     let damage = 0;
     let result: 'DESTROYED' | 'SURVIVED' | 'DIRECT' = 'DIRECT';
+    let flippedTarget = false;
+
+    // Verify attacker is still on the field
+    const isAttackerAlive = myState.monsterZones.includes(attackerId);
+    if (!isAttackerAlive) {
+      // Attacker was removed from the field during a chain
+      pushLog(gameToMutate, `Attack by ${attackerDef.name} aborted (monster no longer on field).`, 'system');
+      setGame(gameToMutate);
+      updateServerGame(gameToMutate);
+      return;
+    }
 
     if (targetId === 'DIRECT') {
       damage = attackerDef?.atk || 0;
@@ -519,10 +744,19 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
       const targetDef = getCardDefByInstance(targetId);
       const targetPos = oppState.cardPositions[targetId] || 'ATTACK';
       
+      // Verify target is still on field
+      if (!oppState.monsterZones.includes(targetId)) {
+         pushLog(gameToMutate, `Attack aborted (target no longer on field).`, 'system');
+         setGame(gameToMutate);
+         updateServerGame(gameToMutate);
+         return;
+      }
+
       // REVEAL IF FACE DOWN
       if (oppState.cardVisibilities[targetId] === 'FACE_DOWN') {
         oppState.cardVisibilities[targetId] = 'FACE_UP';
-        pushLog(nextGame, `Set monster revealed: ${targetDef?.name}`, 'system');
+        pushLog(gameToMutate, `Set monster revealed: ${targetDef?.name}`, 'system');
+        flippedTarget = true;
       }
       
       if (targetPos === 'ATTACK') {
@@ -562,30 +796,37 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
 
     // LOG ATTACK
     const targetName = targetId === 'DIRECT' ? 'Direct Attack' : getCardDefByInstance(targetId)?.name;
-    pushLog(nextGame, `${attackerDef.name} attacks ${targetName}!`, 'combat');
+    pushLog(gameToMutate, `${attackerDef.name} attacks ${targetName}!`, 'combat');
     if (damage > 0) {
-      pushLog(nextGame, `${damage} damage dealt!`, 'combat');
+      pushLog(gameToMutate, `${damage} damage dealt!`, 'combat');
     }
 
-    myState.attacksMade[attackerId] = attacksMade + 1;
+    myState.attacksMade[attackerId] = (myState.attacksMade[attackerId] || 0) + 1;
     setBattleAnim({ attackerId, targetId, damage, result });
     
-    setAttackingInstanceId(null);
-    updateServerGame(nextGame);
-
-    // Emit ON_ATTACK so any reactive card effects can trigger
+    // Emit ON_ATTACK and ON_FLIP
     if (engineRef.current) {
-      await engineRef.current.emit(
+      let stateAfterAttack = await engineRef.current.emit(
         TriggerType.ON_ATTACK,
         { attackerId, targetId, damage, result, controllerIndex: myIndex },
-        nextGame,
-        (events) => {
-          const last = events[events.length - 1];
-          if (last) {
-            updateServerGame(last.nextState);
-          }
-        }
+        gameToMutate,
+        () => {}
       );
+      
+      if (flippedTarget) {
+         stateAfterAttack = await engineRef.current.emit(
+           TriggerType.ON_FLIP,
+           { instanceId: targetId, controllerIndex: oppIndex },
+           stateAfterAttack,
+           () => {}
+         );
+      }
+      
+      updateServerGame(stateAfterAttack);
+      setGame(stateAfterAttack);
+    } else {
+      updateServerGame(gameToMutate);
+      setGame(gameToMutate);
     }
 
     // DELAY VICTORY/DEFEAT SCREEN TO ALLOW ANIMATION TO PLAY
@@ -593,36 +834,162 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
       setBattleAnim(null);
       if (oppState.lp <= 0) {
         setDuelResult('VICTORY');
-        const winGame = JSON.parse(JSON.stringify(nextGame)) as SyncedGameState;
-        winGame.winnerEmail = me.email;
+        const winGame = JSON.parse(JSON.stringify(gameToMutate)) as SyncedGameState;
+        winGame.winnerEmail = me?.email;
         updateServerGame(winGame);
       } else if (myState.lp <= 0) {
         setDuelResult('DEFEAT');
-        const loseGame = JSON.parse(JSON.stringify(nextGame)) as SyncedGameState;
-        loseGame.winnerEmail = opponent.email;
+        const loseGame = JSON.parse(JSON.stringify(gameToMutate)) as SyncedGameState;
+        loseGame.winnerEmail = opponent?.email;
         updateServerGame(loseGame);
       }
     }, 2000);
   };
 
-  const passPriority = async () => {
-    if (!game || !game.waitingForResponse || game.responderEmail !== userEmail) return;
-    const nextGame = JSON.parse(JSON.stringify(game)) as SyncedGameState;
+  const executeAttack = async (attackerId: string, targetId: string | 'DIRECT') => {
+    if (!game || !me || !opponent) return;
     
-    if (engineRef.current) {
-      await engineRef.current.emit(
-        TriggerType.ANY_TIME, 
-        { instanceId: 'PASS', controllerIndex: myIndex },
-        nextGame,
-        (events) => {
-          const lastEvent = events[events.length - 1];
-          if (lastEvent) {
-             setGame(lastEvent.nextState);
-             updateServerGame(lastEvent.nextState);
-          }
-        }
-      );
+    const attackerDef = getCardDefByInstance(attackerId);
+    const nextGame = JSON.parse(JSON.stringify(game)) as SyncedGameState;
+    const myState = nextGame.players[myIndex];
+    const oppState = nextGame.players[oppIndex];
+
+    if (!myState.attacksMade) myState.attacksMade = {};
+    const attacksMade = myState.attacksMade[attackerId] || 0;
+    
+    // Default limit 1 for now
+    if (attacksMade >= 1) {
+       setAttackingInstanceId(null);
+       return;
     }
+
+    if (targetId === 'DIRECT') {
+      nextGame.directAttackPrompt = attackerId;
+      nextGame.pendingAttack = { attackerId, targetId: 'DIRECT' };
+      setGame(nextGame);
+      updateServerGame(nextGame);
+      setAttackingInstanceId(null);
+      return;
+    } else {
+      await finalizeAttack(attackerId, targetId, nextGame);
+    }
+  };
+
+  const respondToDirectAttack = async (action: 'SALVATION' | 'EFFECT' | 'DAMAGE') => {
+    if (!game || !game.directAttackPrompt) return;
+    const attackerId = game.directAttackPrompt;
+    const nextGame = JSON.parse(JSON.stringify(game)) as SyncedGameState;
+    const myState = nextGame.players[myIndex]; // defender
+    const oppState = nextGame.players[oppIndex]; // attacker
+    const attackerDef = getCardDefByInstance(attackerId);
+
+    nextGame.directAttackPrompt = undefined;
+
+    if (action === 'SALVATION' && myState.deck.length > 0 && !myState.salvationUsedThisTurn) {
+      myState.salvationUsedThisTurn = true;
+      const drawnId = myState.deck.pop()!;
+      myState.hand.push(drawnId);
+      const drawnDef = getCardDefByInstance(drawnId);
+
+      if (drawnDef?.type === 'MONSTER') {
+        myState.hand.pop();
+        myState.gy.push(drawnId);
+        pushLog(nextGame, `SALVATION SUCCESS! ${myState.name} drew ${drawnDef.name} (Monster) and blocked the direct attack!`, 'combat');
+        
+        oppState.attacksMade[attackerId] = (oppState.attacksMade[attackerId] || 0) + 1;
+        nextGame.pendingAttack = undefined;
+        
+        setGame(nextGame);
+        updateServerGame(nextGame);
+        return;
+      } else {
+        myState.hand.pop();
+        myState.gy.push(drawnId);
+        pushLog(nextGame, `SALVATION FAILED! ${myState.name} drew ${drawnDef?.name} (Spell). The attack goes through!`, 'combat');
+        
+        // Attack goes through!
+        nextGame.pendingAttack = undefined;
+        await finalizeAttack(attackerId, 'DIRECT', nextGame);
+        return;
+      }
+    } else if (action === 'EFFECT') {
+      // Enter chain priority mode!
+      nextGame.chainPriority = { playerIndex: myIndex, passCount: 0 };
+      setGame(nextGame);
+      updateServerGame(nextGame);
+      return;
+    } else if (action === 'DAMAGE') {
+      // Just take the damage
+      nextGame.pendingAttack = undefined;
+      await finalizeAttack(attackerId, 'DIRECT', nextGame);
+      return;
+    }
+  };
+
+  const passPriority = async () => {
+    if (!game || !game.chainPriority || game.chainPriority.playerIndex !== myIndex) return;
+    if (!engineRef.current) return;
+
+    // Call the engine to pass priority (it will enter isResolving state if both passed)
+    const nextGame = await engineRef.current.passPriority(
+      game,
+      (options, count, message) => {
+        return new Promise<string[]>((resolve) => {
+          setEngineSelectionPrompt({ options, count, message, resolve });
+          setSelectedEngineOptions([]);
+        });
+      }
+    );
+    
+    // Clear selection UI
+    setSelectedPriorityItem(null);
+    setInspectedInstanceId(null);
+    
+    setGame(nextGame);
+    updateServerGame(nextGame);
+  };
+
+  const handleAutoActivate = async (instanceId: string, effectId: string) => {
+    if (!game || !me || !engineRef.current) return;
+    let nextGame = JSON.parse(JSON.stringify(game)) as SyncedGameState;
+    const pState = nextGame.players[myIndex];
+    
+    const isInHand = pState.hand.includes(instanceId);
+    const def = getCardDefByInstance(instanceId);
+    
+    // If it's a Spell activated from hand, auto-place in the first available spell zone
+    if (isInHand && def?.type === 'SPELL') {
+      const emptyZoneIdx = pState.spellZones.findIndex(z => z === null);
+      if (emptyZoneIdx === -1) {
+        addSyncedLog("No empty spell zones!", "system");
+        return; 
+      }
+      pState.hand = pState.hand.filter(id => id !== instanceId);
+      pState.spellZones[emptyZoneIdx] = instanceId;
+      pState.cardVisibilities[instanceId] = 'FACE_UP';
+    }
+
+    // Calculate chain number BEFORE adding to chain
+    const chainNumber = (nextGame.pendingChain?.length || 0) + 1;
+
+    // Show chain build animation
+    setChainBuildAnim({
+      instanceId,
+      chainNumber,
+      cardName: def?.name || 'Card',
+      playerName: me.name
+    });
+
+    // Clear priority selection
+    setSelectedPriorityItem(null);
+    
+    nextGame = await engineRef.current.activateManualEffect(instanceId, effectId, nextGame);
+    updateServerGame(nextGame);
+    
+    // Auto-dismiss chain build animation after 1.5s
+    setTimeout(() => setChainBuildAnim(null), 1500);
+    setInspectedInstanceId(null);
+    setSummoningMode(null);
   };
 
   const handleCardClick = (instanceId: string) => {
@@ -718,7 +1085,8 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     const cardDef = instanceId ? getCardDefByInstance(instanceId) : null;
     const tributesPaid = !tributeModal || isCostConfirmed;
     const isTributeTarget = false; // No longer tributing from field
-    const isSummonable = isPlayer && !isSpectator && summoningMode && tributesPaid && (
+    const smDef = summoningMode?.instanceId ? getCardDefByInstance(summoningMode.instanceId) : null;
+    const isSummonable = isPlayer && !isSpectator && summoningMode && tributesPaid && smDef && smDef.type === type && (
       (summoningMode.type === 'SUMMON' && type === 'MONSTER') ||
       (summoningMode.type === 'SET' && type === 'MONSTER') ||
       (summoningMode.type === 'ACTIVATE' && type === 'SPELL') ||
@@ -726,8 +1094,8 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     ) && !instanceId;
 
     const targetPlayer = isPlayer ? me : opponent;
-    const position = targetPlayer.cardPositions[instanceId!] || "ATTACK";
-    const visibility = targetPlayer.cardVisibilities[instanceId!] || "FACE_UP";
+    const position = targetPlayer.cardPositions ? (targetPlayer.cardPositions[instanceId!] || "ATTACK") : "ATTACK";
+    const visibility = targetPlayer.cardVisibilities ? (targetPlayer.cardVisibilities[instanceId!] || "FACE_UP") : "FACE_UP";
     const isDefense = position === "DEFENSE";
     const isFaceDown = visibility === "FACE_DOWN";
 
@@ -784,6 +1152,18 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
               </div>
             )}
 
+            {/* Chain Link Badge (Top-Left) — shows CL-X when card is in pending chain */}
+            {instanceId && game?.pendingChain?.some(link => link.instanceId === instanceId) && (() => {
+              const chainIdx = game.pendingChain!.findIndex(link => link.instanceId === instanceId);
+              return (
+                <div className="absolute top-1 left-1 z-40 pointer-events-none">
+                  <div className="w-7 h-7 rounded-full bg-indigo-600 border-2 border-indigo-400 flex items-center justify-center shadow-[0_0_15px_rgba(99,102,241,0.6)] animate-pulse">
+                    <span className="text-[10px] font-black text-white leading-none tabular-nums">{chainIdx + 1}</span>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Master Duel Style Stats Overlay (Bottom) */}
             {cardDef && type === 'MONSTER' && !isFaceDown && (
               <div className="absolute inset-x-0 bottom-1 flex flex-col items-center z-30 pointer-events-none px-1">
@@ -804,43 +1184,104 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
               </div>
             )}
 
-            {/* Attack Button & Highlights */}
-            {instanceId && isPlayer && game.phase === GamePhase.BATTLE && game.activePlayerIndex === myIndex && !attackingInstanceId && instanceId === inspectedInstanceId && (me.attacksMade[instanceId] || 0) < 1 && visibility === 'FACE_UP' && (
-              <button 
-                onClick={(e) => { 
-                  e.stopPropagation(); 
-                  const hasOpponentMonsters = opponent.monsterZones.some(id => id !== null);
-                  if (!hasOpponentMonsters) {
-                    setAttackingInstanceId(instanceId);
-                    setIsDirectAttackPrompt(true);
-                  } else {
-                    setAttackingInstanceId(instanceId);
-                  }
-                }}
-                className="absolute -top-14 left-1/2 -translate-x-1/2 px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-black rounded-2xl shadow-[0_10px_20px_rgba(220,38,38,0.4)] transition-all z-[60] flex items-center gap-2 group animate-bounce"
-              >
-                <Sword className="w-4 h-4 group-hover:rotate-45 transition-transform" />
-                <span className="tracking-tighter uppercase italic">Attack</span>
-              </button>
-            )}
+            {/* Action Buttons Container (Attack & Activate) */}
+            <div className="absolute -top-14 left-1/2 -translate-x-1/2 flex gap-2 z-[60]">
+              {/* Attack Button */}
+              {(() => {
+                const isNormalAttack = game.phase === GamePhase.BATTLE;
+                const isDreamAttack = game.phase === GamePhase.DREAM && instanceId === me.dreamSummonedInstanceId;
+                const canShowAttackButton = instanceId && isPlayer && (isNormalAttack || isDreamAttack) && game.activePlayerIndex === myIndex && !attackingInstanceId && (me.attacksMade ? (me.attacksMade[instanceId] || 0) : 0) < 1 && visibility === 'FACE_UP';
+                
+                if (!canShowAttackButton) return null;
+
+                return (
+                  <button 
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      if (isDreamAttack) {
+                        setAttackingInstanceId(instanceId);
+                        setIsDirectAttackPrompt(true);
+                      } else {
+                        const hasOpponentMonsters = opponent.monsterZones.some(id => id !== null);
+                        if (!hasOpponentMonsters) {
+                          setAttackingInstanceId(instanceId);
+                          setIsDirectAttackPrompt(true);
+                        } else {
+                          setAttackingInstanceId(instanceId);
+                        }
+                      }
+                    }}
+                    className="px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-black rounded-2xl shadow-[0_10px_20px_rgba(220,38,38,0.4)] transition-all flex items-center gap-2 group animate-bounce"
+                  >
+                    <Sword className="w-4 h-4 group-hover:rotate-45 transition-transform" />
+                    <span className="tracking-tighter uppercase italic">Attack</span>
+                  </button>
+                );
+              })()}
+
+              {/* Field Activate Button */}
+              {(() => {
+                if (!instanceId || !isPlayer || instanceId !== inspectedInstanceId) return null;
+
+                const registryEffects = CardRegistry.getEffects(cardDef?.id || "");
+                const engineCardDef = cardDef ? engineRef.current?.getCardDef(cardDef.id) : null;
+                const fallbackEffects = Array.isArray(engineCardDef?.effects) ? engineCardDef.effects : [];
+                const activeEffects = registryEffects.length > 0 ? registryEffects : fallbackEffects;
+                
+                const isPriorityWindow = game?.chainPriority && !game?.chainPriority?.isResolving && game.chainPriority.playerIndex === myIndex;
+                const isResolving = game?.chainPriority?.isResolving;
+                if (isResolving) return null; // No manual activations during resolution!
+                
+                const isMyTurn = game.activePlayerIndex === myIndex;
+
+                const activatableEffect = activeEffects.find(eff => {
+                   if (eff.canActivate && !eff.canActivate(game, myIndex)) return false;
+                   
+                   // New restriction: Set Spells cannot be activated until the opponent's turn.
+                   if (visibility === 'FACE_DOWN' && type === 'SPELL' && game.players[myIndex].cardVisibilities[instanceId] === 'FACE_DOWN') {
+                     // Can only be activated if it's NOT the turn it was set.
+                     // The simplest approximation is to block activation on my turn if it is face down.
+                     // Wait, if it was set on my turn, it's face down. 
+                     // We need a proper way to track if it was set this turn, but for now:
+                     // We'll add a property `turnSet` or just assume they can't activate face-down spells on their own turn.
+                     if (isMyTurn) return false;
+                   }
+
+                   if (isPriorityWindow) {
+                      return eff?.trigger?.type === TriggerType.ANY_TIME || eff?.trigger?.type === TriggerType.ON_ACTIVATION;
+                   } else if (isMyTurn) {
+                      return eff?.trigger?.type === TriggerType.ANY_TIME || 
+                             eff?.trigger?.type === TriggerType.IGNITION ||
+                             eff?.trigger?.type === TriggerType.ON_ACTIVATION;
+                   } else {
+                      return eff?.trigger?.type === TriggerType.ANY_TIME;
+                   }
+                });
+
+                if (activatableEffect) {
+                   return (
+                     <button 
+                       onClick={async (e) => { 
+                         e.stopPropagation(); 
+                         if (engineRef.current && game) {
+                            const newGame = await engineRef.current.activateManualEffect(instanceId, activatableEffect.id, game);
+                            updateServerGame(newGame);
+                            setInspectedInstanceId(null);
+                         }
+                       }}
+                       className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black rounded-2xl shadow-[0_10px_20px_rgba(79,70,229,0.4)] transition-all flex items-center gap-2 group animate-bounce"
+                     >
+                       <Flame className="w-4 h-4" />
+                       <span className="tracking-tighter uppercase italic">Activate</span>
+                     </button>
+                   );
+                }
+                return null;
+              })()}
+            </div>
 
             {attackingInstanceId === instanceId && (
               <div className="absolute inset-0 ring-4 ring-red-500 ring-offset-4 ring-offset-slate-950 rounded-2xl animate-pulse z-40" />
-            )}
-
-            {/* Activate Button for Spells on Field */}
-            {instanceId && isPlayer && game.phase === GamePhase.MAIN && game.activePlayerIndex === myIndex && type === 'SPELL' && instanceId === selectedHandInstanceId && (
-              <button 
-                onClick={(e) => { 
-                  e.stopPropagation(); 
-                  setSummoningMode({ type: 'ACTIVATE', instanceId }); 
-                  setSelectedHandInstanceId(null);
-                }}
-                className="absolute -top-14 left-1/2 -translate-x-1/2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl shadow-[0_10px_20px_rgba(16,185,129,0.4)] transition-all z-[60] flex items-center gap-2 group animate-bounce"
-              >
-                <Flame className="w-4 h-4" />
-                <span className="tracking-tighter uppercase italic">Activate</span>
-              </button>
             )}
 
             {attackingInstanceId && !isPlayer && type === 'MONSTER' && instanceId && (
@@ -907,7 +1348,14 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
       <div className="absolute top-4 right-4 flex flex-col items-end gap-2 bg-slate-900/60 backdrop-blur-md border border-slate-800/50 px-6 py-4 rounded-3xl z-[60] shadow-xl min-w-[200px]">
         <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em]">{opponent.name}</span>
         <div className="flex items-center gap-3">
-          <span className="text-3xl font-black text-white font-mono tracking-tighter">{opponent.lp}</span>
+          <motion.div
+             key={opponent.lp}
+             initial={{ scale: 1.5, color: '#f87171' }}
+             animate={{ scale: 1, color: '#ffffff' }}
+             transition={{ duration: 0.5 }}
+           >
+             <span className="text-3xl font-black text-white font-mono tracking-tighter">{opponent.lp}</span>
+           </motion.div>
           <Heart className="w-6 h-6 text-rose-500" />
         </div>
       </div>
@@ -1068,7 +1516,14 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
          <span className="text-[9px] font-black text-slate-500 uppercase tracking-[0.3em]">{me.name} LP</span>
          <div className="flex items-center gap-4">
            <Heart className="w-6 h-6 text-rose-500" />
-           <span className="text-3xl font-black text-white font-mono tracking-tighter">{me.lp}</span>
+           <motion.div
+             key={me.lp}
+             initial={{ scale: 1.5, color: '#4ade80' }}
+             animate={{ scale: 1, color: '#ffffff' }}
+             transition={{ duration: 0.5 }}
+           >
+             <span className="text-3xl font-black text-white font-mono tracking-tighter">{me.lp}</span>
+           </motion.div>
          </div>
       </div>
 
@@ -1119,7 +1574,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                  ))}
                  
                  <AnimatePresence>
-                     {isSelected && !summoningMode && isMyTurn && game.phase === GamePhase.MAIN && (()=>{
+                     {isSelected && !summoningMode && (()=>{
                        const level=def?.level||0;
                        const tributesNeeded=getTributesRequired(level);
                        const handSize = me.hand.length;
@@ -1127,19 +1582,75 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                        const normalSummonForbidden=isNormalSummonForbidden(def);
                        const attrMatch = hasAttributeMatch(def);
                        
+                       const isMyMainPhase = isMyTurn && game.phase === GamePhase.MAIN;
+                       const isMyDreamPhase = isMyTurn && game.phase === GamePhase.DREAM;
+                       const hasDreamSummoned = me.dreamSummonUsedThisTurn;
+                       
+                       const registryEffects = CardRegistry.getEffects(def?.id || "");
+                       const engineDef = engineRef.current?.getCardDef(def?.id || "");
+                       const fallbackEffects = Array.isArray(engineDef?.effects) ? engineDef.effects : [];
+                       const activeEffects = registryEffects && registryEffects.length > 0 ? registryEffects : fallbackEffects;
+                       const hasHandEffect = activeEffects.some(eff => {
+                           if (eff.canActivate && !eff.canActivate(game, myIndex)) return false;
+                           const locs = eff?.restriction?.locations || [];
+                           return locs.length === 0 || locs.includes("HAND" as any);
+                       });
+                       
+                       const canSummonOrSet = isMyMainPhase && !hasDreamSummoned;
+                       const canActivateSpell = def?.type === 'SPELL' && isMyMainPhase && (!activeEffects.length || activeEffects.some(eff => !eff.canActivate || eff.canActivate(game, myIndex)));
+                       const canActivateMonsterEffect = def?.type === 'MONSTER' && isMyMainPhase && hasHandEffect;
+                       const canDreamSummon = isMyDreamPhase && def?.type === 'MONSTER' && !hasDreamSummoned;
+                       
+                       if (!canSummonOrSet && !canActivateSpell && !canActivateMonsterEffect && !canDreamSummon) return null;
+                       if (game?.chainPriority?.isResolving) return null; // No manual actions during resolution!
+
                        return(
                        <motion.div initial={{opacity:0,y:10,scale:0.8}} animate={{opacity:1,y:-40,scale:1}} exit={{opacity:0,y:10,scale:0.8}} className="absolute -top-12 left-1/2 -translate-x-1/2 flex gap-3 z-[100]">
-                         {def?.type===CardType.MONSTER?(<>{!normalSummonForbidden&&(<button onClick={(e)=>{e.stopPropagation();if(!canAffordTribute)return;if(tributesNeeded===0){setSummoningMode({type:'SUMMON',instanceId,isNegated:false});}else{setSummoningMode({type:'SUMMON',instanceId,isNegated:false});setTributeModal({instanceId,required:tributesNeeded});setSelectedTributes([]);setSelectedHandInstanceId(null);}}} disabled={!canAffordTribute} className={`flex flex-col items-center gap-1 group/btn ${!canAffordTribute?'opacity-40 cursor-not-allowed':''}`}><div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-colors ${canAffordTribute?'bg-indigo-600 group-hover/btn:bg-indigo-500':'bg-slate-700'}`}><Zap className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded whitespace-nowrap">{tributesNeeded>0?`Cost (${tributesNeeded})`:'Summon'}</span></button>)}
-                         
-                         {attrMatch && !normalSummonForbidden && (
-                           <button onClick={(e)=>{e.stopPropagation();setSummoningMode({type:'SUMMON',instanceId,isNegated:true});setSelectedHandInstanceId(null);}} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-amber-600 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-amber-500 transition-colors shadow-amber-500/20 animate-pulse"><Sparkles className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded whitespace-nowrap">Free Match</span></button>
+                         {def?.type==='MONSTER' && (
+                           <>
+                             {canSummonOrSet && !normalSummonForbidden && (<button onClick={(e)=>{e.stopPropagation();if(!canAffordTribute)return;if(tributesNeeded===0){setSummoningMode({type:'SUMMON',instanceId,isNegated:false});}else{setSummoningMode({type:'SUMMON',instanceId,isNegated:false});setTributeModal({instanceId,required:tributesNeeded});setSelectedTributes([]);setSelectedHandInstanceId(null);}}} disabled={!canAffordTribute} className={`flex flex-col items-center gap-1 group/btn ${!canAffordTribute?'opacity-40 cursor-not-allowed':''}`}><div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-colors ${canAffordTribute?'bg-indigo-600 group-hover/btn:bg-indigo-500':'bg-slate-700'}`}><Zap className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded whitespace-nowrap">{tributesNeeded>0?`Cost (${tributesNeeded})`:'Summon'}</span></button>)}
+                             
+                             {canSummonOrSet && attrMatch && !normalSummonForbidden && (
+                               <button onClick={(e)=>{e.stopPropagation();setSummoningMode({type:'SUMMON',instanceId,isNegated:true});setSelectedHandInstanceId(null);}} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-amber-600 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-amber-500 transition-colors shadow-amber-500/20 animate-pulse"><Sparkles className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded whitespace-nowrap">Free Match</span></button>
+                             )}
+                             
+                             {canSummonOrSet && (
+                               <button onClick={(e)=>{e.stopPropagation();if(!canAffordTribute)return;if(tributesNeeded===0){setSummoningMode({type:'SET',instanceId});}else{setSummoningMode({type:'SET',instanceId});setTributeModal({instanceId,required:tributesNeeded});setSelectedTributes([]);setSelectedHandInstanceId(null);}}} disabled={!canAffordTribute} className={`flex flex-col items-center gap-1 group/btn ${!canAffordTribute?'opacity-40 cursor-not-allowed':''}`}><div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-colors ${canAffordTribute?'bg-slate-700 group-hover/btn:bg-slate-600':'bg-slate-800'}`}><Shield className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Set</span></button>
+                             )}
+
+                             {canActivateMonsterEffect && (
+                               <button onClick={(e)=>{e.stopPropagation();
+                                  const eff = activeEffects.find(eff => {
+                                      if (eff.canActivate && !eff.canActivate(game, myIndex)) return false;
+                                      return eff.trigger?.type === TriggerType.IGNITION || eff.trigger?.type === TriggerType.ANY_TIME || eff.trigger?.type === TriggerType.ON_ACTIVATION;
+                                  });
+                                  if (eff) handleAutoActivate(instanceId, eff.id);
+                               }} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-emerald-600 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-emerald-500 transition-colors"><Flame className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Activate</span></button>
+                             )}
+                             
+                             {canDreamSummon && (
+                               <button onClick={(e)=>{e.stopPropagation();setSummoningMode({type:'SUMMON',instanceId,isNegated:true,isDreamSummon:true});setSelectedHandInstanceId(null);}} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-fuchsia-600 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-fuchsia-500 transition-colors shadow-fuchsia-500/20 animate-pulse"><CloudRain className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded whitespace-nowrap">Dream Summon</span></button>
+                             )}
+                           </>
                          )}
-<button onClick={(e)=>{e.stopPropagation();if(!canAffordTribute)return;if(tributesNeeded===0){setSummoningMode({type:'SET',instanceId});}else{setSummoningMode({type:'SET',instanceId});setTributeModal({instanceId,required:tributesNeeded});setSelectedTributes([]);setSelectedHandInstanceId(null);}}} disabled={!canAffordTribute} className={`flex flex-col items-center gap-1 group/btn ${!canAffordTribute?'opacity-40 cursor-not-allowed':''}`}><div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-colors ${canAffordTribute?'bg-slate-700 group-hover/btn:bg-slate-600':'bg-slate-800'}`}><Shield className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Set</span></button></>):(<>
-  <button onClick={(e)=>{e.stopPropagation();setSummoningMode({type:'SET',instanceId});setSelectedHandInstanceId(null);}} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-slate-700 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-slate-600 transition-colors"><Shield className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Set</span></button>
-  {def?.effects?.some(eff => eff.restriction.locations.includes("HAND")) && (
-    <button onClick={(e)=>{e.stopPropagation();setSummoningMode({type:'ACTIVATE',instanceId});}} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-emerald-600 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-emerald-500 transition-colors"><Flame className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Activate</span></button>
-  )}
-</>)}
+
+                         {def?.type!=='MONSTER' && (
+                           <>
+                             {canSummonOrSet && (
+                               <button onClick={(e)=>{e.stopPropagation();setSummoningMode({type:'SET',instanceId});setSelectedHandInstanceId(null);}} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-slate-700 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-slate-600 transition-colors"><Shield className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Set</span></button>
+                             )}
+                             
+                             {(canActivateSpell || hasHandEffect) && (
+                               <button onClick={(e)=>{e.stopPropagation();
+                                  const eff = activeEffects.find(eff => {
+                                      if (eff.canActivate && !eff.canActivate(game, myIndex)) return false;
+                                      return eff.trigger?.type === TriggerType.IGNITION || eff.trigger?.type === TriggerType.ANY_TIME || eff.trigger?.type === TriggerType.ON_ACTIVATION;
+                                  });
+                                  if (eff) handleAutoActivate(instanceId, eff.id);
+                               }} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-emerald-600 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-emerald-500 transition-colors"><Flame className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Activate</span></button>
+                             )}
+                           </>
+                         )}
                        </motion.div>
                        );
                      })()}
@@ -1160,10 +1671,14 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
       {/* INSPECTOR PANEL */}
       <AnimatePresence>
         {isInspectorPanelOpen && inspectedCard && !isCardPopupOpen && (
-          <motion.div initial={{ x: -450, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -450, opacity: 0 }} className="absolute top-1/2 -translate-y-1/2 left-6 z-[800] pointer-events-none">
-            <div className="w-[380px] flex flex-col pointer-events-auto relative">
-              <Card card={inspectedCard} className="w-full shadow-2xl cursor-pointer hover:scale-[1.02] transition-transform" onClick={() => setIsCardPopupOpen(true)} />
-              <button onClick={() => setIsInspectorPanelOpen(false)} className="absolute -top-3 -right-3 p-2 bg-slate-800 rounded-full text-slate-500 hover:text-white border border-slate-700 shadow-lg"><X className="w-4 h-4" /></button>
+          <motion.div initial={{ x: -450, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -450, opacity: 0 }} className="absolute top-1/2 -translate-y-1/2 left-6 z-[950] pointer-events-none">
+            <div className="w-[380px] flex flex-col gap-4 pointer-events-auto relative">
+              <div className="relative">
+                <Card card={inspectedCard} className="w-full shadow-2xl cursor-pointer hover:scale-[1.02] transition-transform" onClick={() => setIsCardPopupOpen(true)} />
+                <button onClick={() => setIsInspectorPanelOpen(false)} className="absolute -top-3 -right-3 p-2 bg-slate-800 rounded-full text-slate-500 hover:text-white border border-slate-700 shadow-lg"><X className="w-4 h-4" /></button>
+              </div>
+              
+              {/* Manual Effect Activation Button (Removed: Moved to Field Popover) */}
             </div>
           </motion.div>
         )}
@@ -1264,7 +1779,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
 
       <AnimatePresence>
         {showSettings && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-[500] flex items-center justify-center bg-slate-950/80 backdrop-blur-md">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-[999] flex items-center justify-center bg-slate-950/80 backdrop-blur-md">
             <div className="bg-slate-900 p-12 rounded-[4rem] border border-white/10 w-[420px] shadow-2xl">
               <h3 className="text-3xl font-black italic text-white mb-10 text-center uppercase tracking-tighter">Tactical Command</h3>
               <div className="space-y-4">
@@ -1472,22 +1987,39 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[900] bg-slate-950/90 backdrop-blur-sm flex flex-col font-sans select-none"
+            className={isSelectionMinimized 
+              ? "fixed bottom-8 right-8 w-16 h-16 rounded-full cursor-pointer z-[900] pointer-events-auto" 
+              : "fixed inset-0 z-[900] flex font-sans select-none pointer-events-none"
+            }
+            onClick={() => isSelectionMinimized && setIsSelectionMinimized(false)}
           >
-            <div className="absolute top-0 left-0 w-full p-8 text-center bg-gradient-to-b from-slate-900 to-transparent">
-               <h2 className="text-3xl font-black text-white uppercase tracking-tighter drop-shadow-lg mb-2">Engine Prompt</h2>
-               <p className="text-slate-300 uppercase tracking-widest text-sm font-bold flex items-center justify-center gap-3">
-                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
-                  {engineSelectionPrompt.message}
-               </p>
-               <div className="mt-4 text-[10px] font-black text-cyan-400 uppercase tracking-widest">
-                  Selected: {selectedEngineOptions.length} / {engineSelectionPrompt.count}
-               </div>
-            </div>
+            {isSelectionMinimized ? (
+              <div className="w-full h-full bg-cyan-600 rounded-full flex items-center justify-center shadow-lg shadow-cyan-500/50 hover:bg-cyan-500 transition-colors pointer-events-auto">
+                <Search className="w-8 h-8 text-white" />
+                <span className="absolute -top-2 -right-2 bg-rose-500 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center border-2 border-slate-900">
+                  {selectedEngineOptions.length}
+                </span>
+              </div>
+            ) : (
+              <>
+                <div className="w-[440px] h-full shrink-0 pointer-events-none hidden md:block" />
+                
+                <div className="flex-1 h-full bg-slate-950/90 backdrop-blur-sm flex flex-col pointer-events-auto relative border-l border-slate-700/50 shadow-2xl overflow-hidden">
+                  <div className="absolute top-0 left-0 w-full p-8 text-center bg-gradient-to-b from-slate-900 to-transparent z-10 pointer-events-none">
+                     <h2 className="text-3xl font-black text-white uppercase tracking-tighter drop-shadow-lg mb-2">Engine Prompt</h2>
+                     <p className="text-slate-300 uppercase tracking-widest text-sm font-bold flex items-center justify-center gap-3">
+                        <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+                        {engineSelectionPrompt.message}
+                     </p>
+                     <div className="mt-4 text-[10px] font-black text-cyan-400 uppercase tracking-widest">
+                        Selected: {selectedEngineOptions.length} / {engineSelectionPrompt.count}
+                     </div>
+                  </div>
 
-            <div className="flex-1 flex flex-wrap items-center justify-center gap-4 p-12 mt-20 content-start custom-scrollbar overflow-y-auto">
+                  <div className="flex-1 flex flex-wrap items-center justify-center gap-4 p-12 mt-20 content-start custom-scrollbar overflow-y-auto">
                {engineSelectionPrompt.options.map((instanceId, i) => {
                  const def = getCardDefByInstance(instanceId);
+                 if (!def) return null;
                  const isSelected = selectedEngineOptions.includes(instanceId);
                  return (
                    <motion.div 
@@ -1496,23 +2028,25 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                      animate={{ opacity: 1, y: 0 }}
                      transition={{ delay: i * 0.05 }}
                      onClick={() => {
+                        setInspectedInstanceId(instanceId);
+                        setIsInspectorPanelOpen(true);
                         if (isSelected) {
                           setSelectedEngineOptions(prev => prev.filter(id => id !== instanceId));
                         } else if (selectedEngineOptions.length < engineSelectionPrompt.count) {
                           setSelectedEngineOptions(prev => [...prev, instanceId]);
                         }
                      }}
-                     className={`cursor-pointer transition-all duration-200 w-[180px] rounded-xl overflow-hidden border-2
+                     className={`cursor-pointer transition-all duration-200 w-[150px] aspect-[63/88] rounded-xl overflow-hidden border-2
                        ${isSelected ? 'border-cyan-400 shadow-[0_0_30px_rgba(34,211,238,0.5)] scale-105 z-10' : 'border-slate-700/50 hover:border-slate-500 opacity-80 hover:opacity-100'}
                      `}
                    >
-                     <Card instanceId={instanceId} def={def!} isMe={true} location="DECK" />
+                     <Card card={def} isMiniature className="w-full h-full" />
                    </motion.div>
                  );
                })}
             </div>
 
-            <div className="absolute bottom-12 left-1/2 -translate-x-1/2">
+            <div className="absolute bottom-12 left-1/2 -translate-x-1/2 flex items-center gap-4">
                <button 
                  onClick={() => {
                    if (selectedEngineOptions.length === engineSelectionPrompt.count) {
@@ -1529,73 +2063,297 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                >
                  Confirm Selection
                </button>
+
+               <button 
+                 onClick={() => setIsSelectionMinimized(true)}
+                 className="px-8 py-4 rounded-full font-black uppercase tracking-widest transition-all bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 hover:border-slate-500 shadow-lg"
+               >
+                 View Board
+               </button>
             </div>
+                </div>
+              </>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* MASTER DUEL ACTIVATION HIGHLIGHT */}
+      {/* CHAIN BUILD ANIMATION — Shows when a card is added to the chain */}
       <AnimatePresence>
-        {resolvingCardId && getCardDefByInstance(resolvingCardId) && (
+        {chainBuildAnim && getCardDefByInstance(chainBuildAnim.instanceId) && (
           <motion.div 
-            initial={{ opacity: 0, scale: 0.5, rotateY: 90 }}
-            animate={{ opacity: 1, scale: 1.2, rotateY: 0 }}
-            exit={{ opacity: 0, scale: 2, filter: 'blur(20px)' }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             className="fixed inset-0 z-[1000] flex items-center justify-center pointer-events-none"
           >
-            <div className="relative">
-              <div className="absolute inset-0 bg-indigo-500/40 blur-[100px] animate-pulse rounded-full" />
-              <div className="relative transform-gpu shadow-[0_0_50px_rgba(99,102,241,0.5)] border-4 border-white/20 rounded-2xl overflow-hidden">
-                <Card 
-                  instanceId={resolvingCardId} 
-                  def={getCardDefByInstance(resolvingCardId)!} 
-                  isMe={true} 
-                  location="FIELD" 
-                />
+            <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-[2px]" />
+            <motion.div 
+              initial={{ scale: 0.3, rotateY: 90, opacity: 0 }}
+              animate={{ scale: 1, rotateY: 0, opacity: 1 }}
+              exit={{ scale: 1.5, opacity: 0, filter: 'blur(20px)' }}
+              transition={{ type: 'spring', damping: 15, stiffness: 200 }}
+              className="relative"
+            >
+              {/* Card Image */}
+              <div className="relative transform-gpu shadow-[0_0_60px_rgba(99,102,241,0.5)] border-4 border-indigo-400/50 rounded-2xl overflow-hidden">
+                <Card card={getCardDefByInstance(chainBuildAnim.instanceId)!} />
               </div>
 
+              {/* Chain Link Number Badge */}
+              <motion.div 
+                initial={{ scale: 0, rotate: -180 }}
+                animate={{ scale: 1, rotate: 0 }}
+                transition={{ delay: 0.2, type: 'spring', stiffness: 300 }}
+                className="absolute -top-6 -right-6 w-16 h-16 bg-indigo-600 border-4 border-indigo-300 rounded-full flex items-center justify-center shadow-[0_0_30px_rgba(99,102,241,0.8)] z-20"
+              >
+                <span className="text-2xl font-black text-white italic">{chainBuildAnim.chainNumber}</span>
+              </motion.div>
+
+              {/* Label */}
               <motion.div 
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.3 }}
-                className="absolute -bottom-12 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-md px-6 py-2 rounded-full border border-indigo-500/50"
+                className="absolute -bottom-14 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1"
               >
-                <span className="text-white font-black uppercase tracking-[0.4em] text-xs">Activating</span>
+                <div className="bg-indigo-600/90 backdrop-blur-md px-6 py-2 rounded-full border border-indigo-400/50 shadow-2xl">
+                  <span className="text-white font-black uppercase tracking-[0.3em] text-xs">Chain Link {chainBuildAnim.chainNumber}</span>
+                </div>
+                <span className="text-indigo-300/60 text-[9px] font-black uppercase tracking-widest">{chainBuildAnim.playerName}</span>
               </motion.div>
-            </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* PRIORITY RESPONSE PROMPT */}
+      {/* CHAIN RESOLUTION ANIMATION — Shows chain overview + per-link resolution */}
       <AnimatePresence>
-        {game?.waitingForResponse && game.responderEmail === userEmail && (
+        {chainResolutionAnim && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[1100] flex items-center justify-center pointer-events-none"
+          >
+            <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm" />
+            
+            {chainResolutionAnim.phase === 'OVERVIEW' && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="relative flex flex-col items-center gap-6"
+              >
+                <motion.h2 
+                  initial={{ y: -30, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  className="text-3xl font-black text-white uppercase tracking-[0.5em] italic drop-shadow-2xl"
+                >
+                  Chain Resolving
+                </motion.h2>
+                
+                <div className="flex items-center gap-4">
+                  {chainResolutionAnim.links.slice().reverse().map((link, i) => {
+                    const def = getCardDefByInstance(link.instanceId);
+                    return (
+                      <motion.div
+                        key={link.instanceId}
+                        initial={{ opacity: 0, y: 30, scale: 0.5 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        transition={{ delay: i * 0.15 }}
+                        className="flex flex-col items-center gap-2"
+                      >
+                        <div className="relative">
+                          <div className="w-28 aspect-[63/88] rounded-xl overflow-hidden border-2 border-indigo-500/50 shadow-2xl">
+                            {def && <Card card={def} isMiniature className="w-full h-full" />}
+                          </div>
+                          <div className="absolute -top-3 -right-3 w-8 h-8 bg-indigo-600 border-2 border-indigo-300 rounded-full flex items-center justify-center shadow-lg">
+                            <span className="text-sm font-black text-white">{link.chainNumber}</span>
+                          </div>
+                        </div>
+                        <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">{link.playerName}</span>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: 300 }}
+                  transition={{ delay: 0.5, duration: 0.5 }}
+                  className="h-0.5 bg-gradient-to-r from-transparent via-indigo-500 to-transparent"
+                />
+                <span className="text-[10px] font-black text-indigo-400/60 uppercase tracking-[0.3em]">
+                  Last In → First Out
+                </span>
+              </motion.div>
+            )}
+
+            {chainResolutionAnim.phase === 'RESOLVING' && chainResolutionAnim.currentIndex >= 0 && (() => {
+              const link = chainResolutionAnim.links[chainResolutionAnim.currentIndex];
+              const def = getCardDefByInstance(link.instanceId);
+              return (
+                <motion.div
+                  key={`resolve-${link.chainNumber}`}
+                  initial={{ opacity: 0, scale: 0.5, rotateX: 20 }}
+                  animate={{ opacity: 1, scale: 1, rotateX: 0 }}
+                  exit={{ opacity: 0, scale: 1.3, filter: 'blur(10px)' }}
+                  className="relative flex flex-col items-center gap-6"
+                >
+                  {/* Resolving badge */}
+                  <motion.div 
+                    initial={{ x: -50, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    className="flex items-center gap-3"
+                  >
+                    <div className="w-10 h-10 bg-amber-500 rounded-full flex items-center justify-center border-2 border-amber-300 shadow-[0_0_20px_rgba(245,158,11,0.6)]">
+                      <span className="text-lg font-black text-white italic">{link.chainNumber}</span>
+                    </div>
+                    <span className="text-xl font-black text-white uppercase tracking-widest">Resolving</span>
+                  </motion.div>
+
+                  {/* Card */}
+                  <div className="relative">
+                    <motion.div
+                      animate={{ 
+                        boxShadow: ['0 0 20px rgba(245,158,11,0.3)', '0 0 60px rgba(245,158,11,0.6)', '0 0 20px rgba(245,158,11,0.3)']
+                      }}
+                      transition={{ duration: 1, repeat: Infinity }}
+                      className="border-4 border-amber-400/50 rounded-2xl overflow-hidden"
+                    >
+                      {def && <Card card={def} className="w-[240px]" />}
+                    </motion.div>
+                  </div>
+
+                  {/* Effect name */}
+                  <div className="bg-slate-900/80 backdrop-blur-md px-6 py-2 rounded-full border border-amber-500/30">
+                    <span className="text-amber-300 font-black uppercase tracking-widest text-[10px]">{link.effectName}</span>
+                  </div>
+
+                  {/* Player */}
+                  <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">{link.playerName}</span>
+                </motion.div>
+              );
+            })()}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* PRIORITY RESPONSE PROMPT — Master Duel Style with Confirmation */}
+      <AnimatePresence>
+        {game?.chainPriority && !game.chainPriority.isResolving && game.chainPriority.playerIndex === myIndex && !chainResolutionAnim && activatablePriorityInstances.length > 0 && (
           <motion.div 
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 50 }}
-            className="fixed bottom-32 left-1/2 -translate-x-1/2 z-[800]"
+            className={isPriorityMinimized 
+              ? "fixed bottom-8 left-8 w-16 h-16 rounded-full cursor-pointer z-[800]" 
+              : "fixed bottom-32 left-1/2 -translate-x-1/2 z-[800]"
+            }
+            onClick={() => isPriorityMinimized && setIsPriorityMinimized(false)}
           >
-            <div className="bg-slate-900/90 backdrop-blur-2xl border-2 border-indigo-500 rounded-3xl px-8 py-6 shadow-[0_0_50px_rgba(79,70,229,0.3)] flex flex-col items-center gap-4">
-               <div className="flex items-center gap-3">
+            {isPriorityMinimized ? (
+              <div className="w-full h-full bg-indigo-600 rounded-full flex items-center justify-center shadow-lg shadow-indigo-500/50 hover:bg-indigo-500 transition-colors">
+                <Layers className="w-8 h-8 text-white" />
+                <span className="absolute -top-2 -right-2 bg-emerald-500 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center border-2 border-slate-900">
+                  {activatablePriorityInstances.length}
+                </span>
+              </div>
+            ) : (
+            <div className="bg-slate-900/95 backdrop-blur-2xl border-2 border-indigo-500 rounded-3xl px-8 py-6 shadow-[0_0_50px_rgba(79,70,229,0.3)] flex flex-col items-center gap-6 min-w-[400px] relative">
+               <button 
+                 onClick={(e) => { e.stopPropagation(); setIsPriorityMinimized(true); }}
+                 className="absolute top-4 right-4 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-2 rounded-full transition-colors z-[810]"
+                 title="Minimize to view board"
+               >
+                 <Minus className="w-5 h-5" />
+               </button>
+               <div className="flex items-center gap-3 w-full border-b border-white/10 pb-4 justify-center">
                   <div className="w-2 h-2 bg-indigo-500 rounded-full animate-ping" />
                   <span className="text-white font-black uppercase tracking-widest text-xs">Response Opportunity</span>
+                  {(game.pendingChain?.length || 0) > 0 && (
+                    <span className="ml-2 px-2 py-0.5 bg-indigo-600/50 rounded-full text-[8px] font-black text-indigo-300 uppercase">
+                      Chain: {game.pendingChain?.length}
+                    </span>
+                  )}
                </div>
-               <p className="text-slate-400 text-[10px] uppercase font-bold tracking-tighter">Do you want to chain an effect?</p>
-               <div className="flex gap-4 w-full">
+               
+               <p className="text-slate-300 text-sm uppercase font-bold tracking-widest text-center">
+                 {selectedPriorityItem ? 'Activate this card?' : 'Select a card to chain'}
+               </p>
+               
+               <div className="flex gap-4 w-full overflow-x-auto custom-scrollbar p-4 justify-center max-w-[800px] min-h-[140px] items-center">
+                  {activatablePriorityInstances.length > 0 ? activatablePriorityInstances.map((item) => {
+                     const def = getCardDefByInstance(item.instanceId);
+                     if (!def) return null;
+                     const isSelected = selectedPriorityItem?.instanceId === item.instanceId;
+                     return (
+                        <div 
+                           key={item.instanceId}
+                           onClick={() => {
+                             // Single click = select / inspect
+                             setSelectedPriorityItem({ instanceId: item.instanceId, effectId: item.effectId });
+                             setInspectedInstanceId(item.instanceId);
+                             setIsInspectorPanelOpen(true);
+                           }}
+                           onDoubleClick={() => {
+                             // Double click = instant activate (shortcut)
+                             handleAutoActivate(item.instanceId, item.effectId);
+                           }}
+                           className={`relative cursor-pointer transition-all duration-300 hover:scale-110 hover:-translate-y-2 hover:z-10 group shrink-0 w-24 aspect-[63/88] rounded-xl ${
+                             isSelected ? 'scale-110 -translate-y-3 z-10' : ''
+                           }`}
+                        >
+                           <Card card={def} isMiniature className={`rounded-xl shadow-lg border-2 w-full h-full absolute inset-0 transition-all ${
+                             isSelected 
+                               ? 'border-emerald-400 shadow-[0_0_25px_rgba(52,211,153,0.5)]' 
+                               : 'border-indigo-500/50 group-hover:border-indigo-400 group-hover:shadow-[0_0_20px_rgba(99,102,241,0.5)]'
+                           }`} />
+                           {isSelected && (
+                             <motion.div 
+                               initial={{ scale: 0 }}
+                               animate={{ scale: 1 }}
+                               className="absolute -top-2 -right-2 w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center border-2 border-white z-20"
+                             >
+                               <span className="text-[10px] font-black text-white">✓</span>
+                             </motion.div>
+                           )}
+                        </div>
+                     );
+                  }) : (
+                     <div className="text-slate-500 text-xs font-black uppercase tracking-widest py-4 text-center">
+                        No activatable effects
+                     </div>
+                  )}
+               </div>
+
+               <div className="flex gap-4 w-full mt-2">
+                  {/* Chain / Activate Button */}
                   <button 
-                    onClick={passPriority}
-                    className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-black uppercase text-[10px] tracking-widest transition-all"
+                    onClick={() => {
+                      if (selectedPriorityItem) {
+                        handleAutoActivate(selectedPriorityItem.instanceId, selectedPriorityItem.effectId);
+                      }
+                    }}
+                    disabled={!selectedPriorityItem}
+                    className={`flex-1 py-4 rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-lg flex items-center justify-center gap-2 ${
+                      selectedPriorityItem 
+                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/30 active:scale-95' 
+                        : 'bg-slate-800/50 text-slate-600 cursor-not-allowed'
+                    }`}
                   >
-                    Pass
+                    <Zap className="w-4 h-4" />
+                    Chain
                   </button>
                   <button 
-                    className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-lg shadow-indigo-900/40 transition-all animate-pulse"
+                    onClick={passPriority}
+                    className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-lg hover:shadow-xl hover:shadow-slate-900/50"
                   >
-                    Select Card
+                    Cancel
                   </button>
                </div>
             </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -1607,29 +2365,58 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
             initial={{ opacity: 0 }} 
             animate={{ opacity: 1 }} 
             exit={{ opacity: 0 }} 
-            className="fixed inset-0 z-[700] bg-slate-950/40 flex items-center justify-end pr-12 p-6"
-            onClick={() => setViewingZone(null)}
+            className={isZoneViewerMinimized 
+              ? "fixed bottom-8 left-8 w-16 h-16 rounded-full cursor-pointer z-[700] pointer-events-auto" 
+              : "fixed inset-0 z-[700] flex font-sans select-none pointer-events-none"
+            }
+            onClick={() => isZoneViewerMinimized && setIsZoneViewerMinimized(false)}
           >
-            <motion.div 
-              initial={{ x: 100, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: 100, opacity: 0 }}
-              className="bg-slate-900 border border-white/5 rounded-[2.5rem] w-[40vw] max-w-3xl h-[75vh] flex flex-col shadow-2xl overflow-hidden p-10"
-              onClick={e => e.stopPropagation()}
-            >
-            <div className="flex items-center justify-between mb-8">
-               <div className="flex flex-col gap-1">
-                 <h2 className="text-2xl font-black text-white uppercase tracking-tighter">
-                   {viewingZone.location === 'GY' ? 'Graveyard' : 'Banishment Zone'}
-                 </h2>
-                 <p className="text-slate-500 text-sm font-bold uppercase tracking-widest">
-                   Viewing {game.players[viewingZone.playerIndex].name}'s {viewingZone.location}
-                 </p>
-               </div>
-               <button onClick={() => setViewingZone(null)} className="p-3 bg-slate-800 hover:bg-red-500 rounded-2xl text-white transition-colors">
-                 <X className="w-6 h-6" />
-               </button>
-            </div>
+            {isZoneViewerMinimized ? (
+              <div className="w-full h-full bg-slate-700 rounded-full flex items-center justify-center shadow-lg shadow-slate-900/50 hover:bg-slate-600 transition-colors pointer-events-auto border-2 border-slate-500">
+                <Search className="w-8 h-8 text-white" />
+                <span className="absolute -top-2 -right-2 bg-slate-900 text-slate-300 text-[10px] font-black tracking-widest px-2 py-0.5 rounded-full border border-slate-700">
+                  {viewingZone.location}
+                </span>
+              </div>
+            ) : (
+              <>
+                {/* Left clear area for Inspector */}
+                <div className="w-[440px] h-full shrink-0 pointer-events-auto hidden md:block" onClick={() => { setViewingZone(null); setIsZoneViewerMinimized(false); }} />
+                
+                {/* Right blurred area */}
+                <div 
+                  className="flex-1 h-full bg-slate-950/60 backdrop-blur-2xl border-l border-white/5 pointer-events-auto flex items-center justify-end pr-12 p-6"
+                  onClick={() => { setViewingZone(null); setIsZoneViewerMinimized(false); }}
+                >
+                  <motion.div 
+                    initial={{ x: 100, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={{ x: 100, opacity: 0 }}
+                    className="bg-slate-900 border border-white/5 rounded-[2.5rem] w-[40vw] max-w-3xl h-[75vh] flex flex-col shadow-2xl overflow-hidden p-10"
+                    onClick={e => e.stopPropagation()}
+                  >
+                <div className="flex items-center justify-between mb-8">
+                   <div className="flex flex-col gap-1">
+                     <h2 className="text-2xl font-black text-white uppercase tracking-tighter">
+                       {viewingZone.location === 'GY' ? 'Graveyard' : 'Banishment Zone'}
+                     </h2>
+                     <p className="text-slate-500 text-sm font-bold uppercase tracking-widest">
+                       Viewing {game.players[viewingZone.playerIndex].name}'s {viewingZone.location}
+                     </p>
+                   </div>
+                   <div className="flex gap-2">
+                     <button 
+                       onClick={() => setIsZoneViewerMinimized(true)} 
+                       className="p-3 bg-slate-800 hover:bg-slate-700 rounded-2xl text-slate-400 hover:text-white transition-colors flex items-center gap-2"
+                     >
+                       <Minimize2 className="w-5 h-5" />
+                       <span className="text-[10px] font-black uppercase tracking-widest">View Board</span>
+                     </button>
+                     <button onClick={() => { setViewingZone(null); setIsZoneViewerMinimized(false); }} className="p-3 bg-slate-800 hover:bg-red-500 rounded-2xl text-white transition-colors">
+                       <X className="w-6 h-6" />
+                     </button>
+                   </div>
+                </div>
 
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-4" onClick={e => e.stopPropagation()}>
                {(() => {
@@ -1660,8 +2447,11 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                  );
                })()}
             </div>
+                  </motion.div>
+                </div>
+              </>
+            )}
           </motion.div>
-        </motion.div>
         )}
       </AnimatePresence>
 
@@ -1737,7 +2527,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                   onClick={() => { setIsDirectAttackPrompt(false); executeAttack(attackingInstanceId!, 'DIRECT'); }} 
                   className="flex-1 py-4 bg-red-600 hover:bg-red-500 text-white font-black rounded-2xl uppercase transition-all shadow-lg shadow-red-600/20 active:scale-95"
                 >
-                  Confirm
+                  Attack
                 </button>
                 <button 
                   onClick={() => { setIsDirectAttackPrompt(false); setAttackingInstanceId(null); }} 
@@ -1745,6 +2535,80 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                 >
                   Cancel
                 </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* DIRECT ATTACK PROMPT */}
+      <AnimatePresence>
+        {game?.directAttackPrompt && !isMyTurn && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[900] bg-black/60 backdrop-blur-sm flex items-center justify-center"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-slate-900 p-10 rounded-[2.5rem] border border-fuchsia-500/30 flex flex-col items-center gap-8 shadow-[0_0_50px_rgba(217,70,239,0.2)] max-w-md w-full"
+            >
+              <div className="w-20 h-20 bg-fuchsia-500/20 rounded-full flex items-center justify-center border border-fuchsia-500/30 animate-pulse">
+                <Shield className="w-10 h-10 text-fuchsia-400" />
+              </div>
+              <div className="text-center">
+                <h3 className="text-3xl font-black text-fuchsia-400 uppercase italic tracking-tighter mb-2">Direct Attack!</h3>
+                <p className="text-slate-300 text-sm">You are being attacked directly! Choose your response.</p>
+              </div>
+              <div className="flex flex-col gap-3 w-full">
+                {game.players[myIndex].deck.length > 0 && !game.players[myIndex].salvationUsedThisTurn && (
+                  <button 
+                    onClick={() => respondToDirectAttack('SALVATION')} 
+                    className="w-full py-4 bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-black rounded-2xl uppercase transition-all shadow-lg shadow-fuchsia-600/20 active:scale-95 text-sm tracking-widest"
+                  >
+                    Use Salvation
+                  </button>
+                )}
+                <button 
+                  onClick={() => respondToDirectAttack('EFFECT')} 
+                  className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-2xl uppercase transition-all shadow-lg shadow-blue-600/20 active:scale-95 text-sm tracking-widest"
+                >
+                  Activate Effect
+                </button>
+                <button 
+                  onClick={() => respondToDirectAttack('DAMAGE')} 
+                  className="w-full py-4 bg-slate-800 hover:bg-red-500/80 text-white font-black rounded-2xl uppercase transition-all active:scale-95 text-sm tracking-widest"
+                >
+                  Take Damage
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* WAITING FOR DIRECT ATTACK RESPONSE (Attacker View) */}
+      <AnimatePresence>
+        {game?.directAttackPrompt && isMyTurn && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[900] bg-black/60 backdrop-blur-sm flex items-center justify-center pointer-events-none"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-slate-900 p-10 rounded-[2.5rem] border border-fuchsia-500/30 flex flex-col items-center gap-6 shadow-[0_0_50px_rgba(217,70,239,0.2)] max-w-md w-full"
+            >
+              <div className="w-16 h-16 bg-fuchsia-500/20 rounded-full flex items-center justify-center border border-fuchsia-500/30 animate-spin-slow">
+                <Loader2 className="w-8 h-8 text-fuchsia-400 animate-spin" />
+              </div>
+              <div className="text-center">
+                <h3 className="text-2xl font-black text-fuchsia-400 uppercase italic tracking-tighter mb-2">Direct Attack Paused</h3>
+                <p className="text-slate-300 text-sm font-bold uppercase tracking-widest">Waiting for opponent to respond...</p>
               </div>
             </motion.div>
           </motion.div>

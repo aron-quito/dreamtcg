@@ -67,7 +67,7 @@ app.get('/api/cards', (req, res) => {
   if (!userEmail) return res.status(400).json({ error: 'User context required' });
 
   try {
-    const cards = db.prepare("SELECT * FROM cards WHERE user_email = ? OR user_email = 'public' ORDER BY created_at DESC").all(userEmail);
+    const cards = db.prepare("SELECT * FROM cards WHERE user_email = ? OR user_email = 'public' OR is_public = 1 ORDER BY created_at DESC").all(userEmail);
     const parsedCards = cards.map((c: any) => ({
       ...c,
       effects: JSON.parse(c.effects || '[]'),
@@ -205,11 +205,8 @@ app.post('/api/rooms/host', (req, res) => {
     // PREVENT MULTI-PRESENCE: Check if already a player in any active room
     const existing = db.prepare('SELECT id FROM rooms WHERE player1_email = ? OR player2_email = ?').get(email, email) as any;
     if (existing) {
-      return res.status(400).json({ 
-        error: 'already_in_match', 
-        roomId: existing.id,
-        message: 'You are already in an active match. Redirecting...' 
-      });
+      // Leave the old room before creating a new one
+      leaveRoom(existing.id, email);
     }
 
     const roomId = Math.random().toString(36).substr(2, 6).toUpperCase();
@@ -230,11 +227,8 @@ app.post('/api/rooms/join', (req, res) => {
     // PREVENT MULTI-PRESENCE
     const existing = db.prepare('SELECT id FROM rooms WHERE (player1_email = ? OR player2_email = ?) AND id != ?').get(email, email, roomId) as any;
     if (existing) {
-      return res.status(400).json({ 
-        error: 'already_in_match', 
-        roomId: existing.id,
-        message: 'You are already in another match. Redirecting...' 
-      });
+      // Leave the old room before joining a new one
+      leaveRoom(existing.id, email);
     }
 
     const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId) as any;
@@ -291,43 +285,48 @@ app.post('/api/rooms/spectate', (req, res) => {
   }
 });
 
+function leaveRoom(roomId: string, email: string) {
+  const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId) as any;
+  if (!room) return;
+
+  const isOwner = room.host_email === email;
+
+  if (isOwner) {
+    db.prepare('DELETE FROM rooms WHERE id = ?').run(roomId);
+  } else {
+    // CLEAR PLAYER SLOTS and related state
+    db.prepare(`
+      UPDATE rooms SET 
+        player1_email = CASE WHEN player1_email = ? THEN NULL ELSE player1_email END,
+        player2_email = CASE WHEN player2_email = ? THEN NULL ELSE player2_email END,
+        spectator1_email = CASE WHEN spectator1_email = ? THEN NULL ELSE spectator1_email END,
+        spectator2_email = CASE WHEN spectator2_email = ? THEN NULL ELSE spectator2_email END,
+        guest_deck_id = CASE WHEN player2_email = ? THEN NULL ELSE guest_deck_id END,
+        guest_ready = CASE WHEN player2_email = ? THEN 0 ELSE guest_ready END,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(email, email, email, email, email, email, roomId);
+
+    // CRITICAL: If a duel was in progress and someone left, the duel is broken.
+    // We should check if players are missing and update status or close room.
+    const updatedRoom = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId) as any;
+    if (updatedRoom && (updatedRoom.status === 'DUELING' || updatedRoom.status === 'RPS')) {
+      if (!updatedRoom.player1_email || !updatedRoom.player2_email) {
+        // If a player is missing during a duel, close the room as it's invalid now.
+        db.prepare('DELETE FROM rooms WHERE id = ?').run(roomId);
+      }
+    }
+  }
+  
+  logUserAction(email, 'LEAVE_ROOM', { roomId });
+}
+
 // Leave Room
 app.post('/api/rooms/leave', (req, res) => {
   const { roomId, email } = req.body;
+  console.log(`[ROOM_LEAVE] Request from ${email} for room ${roomId}`);
   try {
-    const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId) as any;
-    if (!room) return res.status(404).json({ error: 'Room not found' });
-
-    const isOwner = room.host_email === email;
-
-    if (isOwner) {
-      db.prepare('DELETE FROM rooms WHERE id = ?').run(roomId);
-    } else {
-      // CLEAR PLAYER SLOTS
-      db.prepare(`
-        UPDATE rooms SET 
-          player1_email = CASE WHEN player1_email = ? THEN NULL ELSE player1_email END,
-          player2_email = CASE WHEN player2_email = ? THEN NULL ELSE player2_email END,
-          spectator1_email = CASE WHEN spectator1_email = ? THEN NULL ELSE spectator1_email END,
-          spectator2_email = CASE WHEN spectator2_email = ? THEN NULL ELSE spectator2_email END,
-          spectator3_email = CASE WHEN spectator3_email = ? THEN NULL ELSE spectator3_email END,
-          spectator4_email = CASE WHEN spectator4_email = ? THEN NULL ELSE spectator4_email END,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(email, email, email, email, email, email, roomId);
-
-      // CRITICAL: If a duel was in progress and someone left, the duel is broken.
-      // We should check if players are missing and update status or close room.
-      const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId) as any;
-      if (room && (room.status === 'DUELING' || room.status === 'RPS')) {
-        if (!room.player1_email || !room.player2_email) {
-          // If a player is missing during a duel, close the room as it's invalid now.
-          db.prepare('DELETE FROM rooms WHERE id = ?').run(roomId);
-        }
-      }
-    }
-    
-    logUserAction(email, 'LEAVE_ROOM', { roomId });
+    leaveRoom(roomId, email);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to leave room' });
@@ -394,15 +393,34 @@ app.post('/api/users/heartbeat', (req, res) => {
   }
 });
 
+// Suspend Room (unready player but don't leave)
+app.post('/api/rooms/suspend', (req, res) => {
+  const { roomId, email } = req.body;
+  try {
+    const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId) as any;
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+
+    if (room.player1_email === email) {
+      db.prepare('UPDATE rooms SET host_ready = 0 WHERE id = ?').run(roomId);
+    } else if (room.player2_email === email) {
+      db.prepare('UPDATE rooms SET guest_ready = 0 WHERE id = ?').run(roomId);
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to suspend room' });
+  }
+});
+
 // Find active room for user (Reconnection logic)
 app.get('/api/rooms/active', (req, res) => {
   const { email } = req.query;
   try {
     const room = db.prepare(`
       SELECT * FROM rooms 
-      WHERE (player1_email = ? OR player2_email = ? OR spectator1_email = ? OR spectator2_email = ? OR spectator3_email = ? OR spectator4_email = ?)
+      WHERE (player1_email = ? OR player2_email = ? OR spectator1_email = ? OR spectator2_email = ?)
       ORDER BY updated_at DESC LIMIT 1
-    `).get(email, email, email, email, email, email) as any;
+    `).get(email, email, email, email) as any;
     res.json(room || null);
   } catch (error) {
     res.status(500).json({ error: 'Failed to find active room' });
@@ -515,7 +533,16 @@ app.post('/api/rooms/update', (req, res) => {
     const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId) as any;
     if (!room) return res.status(404).json({ error: 'Room not found' });
 
-    if (status) {
+    if (status === 'RPS') {
+      // Validate that both decks exist before starting
+      const hostDeck = db.prepare('SELECT id FROM decks WHERE id = ?').get(room.host_deck_id);
+      const guestDeck = db.prepare('SELECT id FROM decks WHERE id = ?').get(room.guest_deck_id);
+      
+      if (!hostDeck || !guestDeck) {
+        return res.status(400).json({ error: 'One or both players have selected an invalid or deleted deck. Please refresh the page and select a valid deck.' });
+      }
+      db.prepare('UPDATE rooms SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, roomId);
+    } else if (status) {
       db.prepare('UPDATE rooms SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, roomId);
     }
 
@@ -571,7 +598,7 @@ app.post('/api/rooms/rps', (req, res) => {
       const g = updatedRoom.guest_choice;
       
       if (h === g) {
-        db.prepare("UPDATE rooms SET host_choice = NULL, guest_choice = NULL, turn_order_decider = 'TIE' WHERE id = ?").run(roomId);
+        db.prepare("UPDATE rooms SET turn_order_decider = 'TIE' WHERE id = ?").run(roomId);
       } else {
         const p1Wins = (h === 'ROCK' && g === 'SCISSORS') || (h === 'PAPER' && g === 'ROCK') || (h === 'SCISSORS' && g === 'PAPER');
         const winnerEmail = p1Wins ? updatedRoom.player1_email : updatedRoom.player2_email;

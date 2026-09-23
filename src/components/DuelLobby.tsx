@@ -47,13 +47,16 @@ export function DuelLobby({ userEmail, onRoomCreated, onRoomJoined, onBack }: Du
   const [isJoining, setIsJoining] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
 
+  const [activeRoom, setActiveRoom] = useState<RoomData | null>(null);
+
   // Fetch Rooms & Telemetry
   const fetchData = async () => {
     setIsLoadingRooms(true);
     try {
-      const [roomsRes, onlineRes] = await Promise.all([
+      const [roomsRes, onlineRes, activeRoomRes] = await Promise.all([
         fetch(`${API_BASE}/rooms`),
-        fetch(`${API_BASE}/users/online`)
+        fetch(`${API_BASE}/users/online`),
+        fetch(`${API_BASE}/rooms/active?email=${userEmail}`)
       ]);
 
       if (roomsRes.ok) {
@@ -66,6 +69,11 @@ export function DuelLobby({ userEmail, onRoomCreated, onRoomJoined, onBack }: Du
       if (onlineRes.ok) {
         const users = await onlineRes.json();
         setOnlineUsers(users);
+      }
+
+      if (activeRoomRes.ok) {
+        const room = await activeRoomRes.json();
+        setActiveRoom(room);
       }
     } catch (error) {
       console.error("Failed to fetch data:", error);
@@ -194,6 +202,30 @@ export function DuelLobby({ userEmail, onRoomCreated, onRoomJoined, onBack }: Du
           </header>
 
           <main className="flex-1 overflow-y-auto p-10 custom-scrollbar">
+            {activeRoom && (
+              <motion.div 
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-8 p-6 bg-indigo-500/10 border border-indigo-500/30 rounded-2xl flex items-center justify-between"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-indigo-500/20 rounded-full flex items-center justify-center">
+                    <Zap className="w-6 h-6 text-indigo-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-white font-bold text-lg">Active Duel</h3>
+                    <p className="text-slate-400 text-sm">You are currently suspended in Room <span className="font-mono text-indigo-400">{activeRoom.id}</span></p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onRoomJoined(activeRoom.id)}
+                  className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold uppercase tracking-widest text-sm transition-all"
+                >
+                  Rejoin Room
+                </button>
+              </motion.div>
+            )}
+
             <AnimatePresence mode="wait">
               {activeTab === 'BROWSE' && (
                 <motion.div 

@@ -27,7 +27,7 @@ interface DeckBuilderProps {
   onDeleteDeck: (id: string) => void;
   onCreateDeck: () => void;
   onSelectDeck: (deck: DeckDefinition) => void;
-  onNavigateToBuilder?: () => void;
+
   hasUnsavedChanges?: boolean;
 }
 
@@ -40,7 +40,7 @@ export const DeckBuilder: React.FC<DeckBuilderProps> = ({
   onDeleteDeck, 
   onCreateDeck,
   onSelectDeck,
-  onNavigateToBuilder,
+
   hasUnsavedChanges = false
 }) => {
   const [selectedCard, setSelectedCard] = React.useState<CardDefinition | null>(collection.find(c => c.isPublic) || null);
@@ -298,15 +298,6 @@ export const DeckBuilder: React.FC<DeckBuilderProps> = ({
               <Package className="w-4 h-4" /> Collection
             </h3>
             <div className="flex items-center gap-2">
-              {onNavigateToBuilder && (
-                <button 
-                  onClick={onNavigateToBuilder}
-                  className="p-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 rounded-lg transition-all group"
-                  title="Go to Card Builder"
-                >
-                  <Plus className="w-3.5 h-3.5 group-hover:rotate-90 transition-transform" />
-                </button>
-              )}
               <div className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-400 font-bold">
                 {publicCollection.length} Total
               </div>

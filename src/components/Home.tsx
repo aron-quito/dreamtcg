@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 
 interface HomeProps {
-  onNavigate: (module: 'BUILDER' | 'DECK' | 'TEST' | 'SHOP') => void;
+  onNavigate: (module: 'DECK' | 'TEST' | 'SHOP') => void;
   cardCount: number;
   deckCount: number;
   userName: string;
@@ -120,15 +120,7 @@ export function Home({ onNavigate, cardCount, deckCount, userName, onLogout, onN
             onClick={() => onNavigate('DECK')}
             stats={`${deckCount} / 20 Saved`}
           />
-          <MenuTile
-            title="BUILDER"
-            subtitle="Create custom card mechanics"
-            icon={<Hammer className="w-10 h-10" />}
-            color="cyan"
-            delay={0.3}
-            onClick={() => onNavigate('BUILDER')}
-            stats={`${cardCount} Custom Cards`}
-          />
+
           <MenuTile
             title="SHOP"
             subtitle="Acquire new power for your decks"

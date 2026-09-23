@@ -117,7 +117,7 @@ export const TestMode: React.FC<TestModeProps> = ({ cards, decks }) => {
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   const getCardDefByInstance = useCallback((instanceId: string) => {
-    const cardId = instanceId.split('_')[0];
+    const cardId = instanceId.substring(0, instanceId.lastIndexOf('_'));
     return cards.find(c => c.id === cardId);
   }, [cards]);
 

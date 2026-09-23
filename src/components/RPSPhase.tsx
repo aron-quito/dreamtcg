@@ -295,7 +295,7 @@ export function RPSPhase({ roomId, userEmail, isSpectator, onFinished }: RPSPhas
               <ChoiceDisplay 
                 label={isSpectator ? (roomData?.p1_name || "PLAYER 1") : "YOUR CHOICE"} 
                 choice={isSpectator ? roomData?.host_choice : myChoice} 
-                isWinner={deciderEmail === roomData?.player1_email} 
+                isWinner={deciderEmail === (isSpectator ? roomData?.player1_email : userEmail)} 
                 isTie={isTie} 
               />
               <div className="flex flex-col items-center">
@@ -316,7 +316,7 @@ export function RPSPhase({ roomId, userEmail, isSpectator, onFinished }: RPSPhas
               <ChoiceDisplay 
                 label={isSpectator ? (roomData?.p2_name || "PLAYER 2") : (roomData?.p1_name || "OPPONENT")} 
                 choice={isSpectator ? roomData?.guest_choice : opponentChoice} 
-                isWinner={deciderEmail === roomData?.player2_email} 
+                isWinner={deciderEmail === (isSpectator ? roomData?.player2_email : (isP1 ? roomData?.player2_email : roomData?.player1_email))} 
                 isTie={isTie} 
               />
             </div>

@@ -194,10 +194,11 @@ export const Card: React.FC<CardProps> = ({
       if (w > 10) setCardWidth(w);
     };
     measure();
+    if (isUltraMiniature || isMiniature) return;
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [isUltraMiniature, isMiniature]);
 
   const fw = cardWidth; // alias
   const fs = {

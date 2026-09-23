@@ -113,55 +113,60 @@ export const initDb = () => {
   try { db.exec("UPDATE users SET last_seen_at = CURRENT_TIMESTAMP WHERE last_seen_at IS NULL"); } catch (e) {}
   try { db.exec("UPDATE rooms SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL"); } catch (e) {}
 
-  // Seed Initial Cards if empty
-  const cardCount = db.prepare('SELECT COUNT(*) as count FROM cards').get() as { count: number };
-  if (cardCount.count === 0) {
+  // DB is not seeded with JSON AST cards anymore, they are managed via code.
+
+  // --- CLEAN START PROTOCOL ---
+  try {
+    // 1. Reset all users to OFFLINE
+    db.prepare("UPDATE users SET status = 'OFFLINE'").run();
+    // 2. Clear all rooms (Re-synchronization required after restart)
+    db.prepare("DELETE FROM rooms").run();
+    // 3. Clear all cards to start fresh (as requested by user)
+    db.prepare("DELETE FROM cards").run();
+    
+    // Seed base cards for the 'admin' user
     const initialCards = [
       {
         id: 'base_01',
         name: 'Dream Weaver',
         type: 'MONSTER',
-        level: 4,
+        level: 1,
         atk: 1800,
         def: 1200,
         attribute: 'LIGHT',
         description: 'When summoned, draw 2 cards by paying 500 LP.',
-        effects: JSON.stringify([
-          {
-            id: 'eff_01',
-            name: 'Visionary Reach',
-            restriction: { locations: ['MONSTER_ZONE'], frequency: 'ONCE_PER_TURN' },
-            trigger: { type: 'ON_SUMMON' },
-            costs: [{ action: 'PAY_LP', params: { n: 500 } }],
-            resolutions: [{ action: 'DRAW', params: { n: 2 } }]
-          }
-        ]),
+        effects: JSON.stringify([]), // Effects managed by registry
         is_custom: 0,
         is_public: 1,
-        user_email: 'public'
+        user_email: 'admin'
       },
       {
         id: 'base_02',
         name: 'Nightmare Shade',
         type: 'MONSTER',
-        level: 4,
+        level: 1,
         atk: 1500,
         def: 1500,
         attribute: 'DARK',
-        description: 'Any time: Banish 1 card from opponent GY.',
-        effects: JSON.stringify([
-          {
-            id: 'eff_02',
-            name: 'Shadow Banish',
-            restriction: { locations: ['MONSTER_ZONE'], frequency: 'UNLIMITED' },
-            trigger: { type: 'ANY_TIME' },
-            costs: [],
-            resolutions: [{ action: 'BANISH_CARD', params: { target: 'OPPONENT_GY' } }]
-          }
-        ]),
+        description: 'Any time: Discard 1 to banish 1 card from opponent GY.',
+        effects: JSON.stringify([]), // Effects managed by registry
         is_custom: 0,
         is_public: 1,
-        user_email: 'public'
+        user_email: 'admin'
+      },
+      {
+        id: 'base_03',
+        name: 'Healing Breeze',
+        type: 'SPELL',
+        level: 0,
+        atk: 0,
+        def: 0,
+        attribute: 'WIND',
+        description: 'Draw 1 card and gain 1000 LP.',
+        effects: JSON.stringify([]), // Effects managed by registry
+        is_custom: 0,
+        is_public: 1,
+        user_email: 'admin'
       }
     ];
 
@@ -173,18 +178,11 @@ export const initDb = () => {
     for (const card of initialCards) {
       insert.run(card);
     }
-    console.log('Database seeded with initial cards.');
-  }
+    console.log('[SYSTEM] Seeded base cards for user "admin".');
 
-  // --- CLEAN START PROTOCOL ---
-  try {
-    // 1. Reset all users to OFFLINE
-    db.prepare("UPDATE users SET status = 'OFFLINE'").run();
-    // 2. Clear all rooms (Re-synchronization required after restart)
-    db.prepare("DELETE FROM rooms").run();
-    // 3. Log server restart
-    db.prepare("INSERT INTO user_logs (user_email, action, metadata) VALUES ('SYSTEM', 'SERVER_RESTART', 'All sessions and rooms cleared')").run();
-    console.log('[SYSTEM] Clean start protocol executed: All rooms cleared and users set to OFFLINE.');
+    // 4. Log server restart
+    db.prepare("INSERT INTO user_logs (user_email, action, metadata) VALUES ('SYSTEM', 'SERVER_RESTART', 'All sessions, rooms and cards cleared')").run();
+    console.log('[SYSTEM] Clean start protocol executed: All rooms and cards cleared, users set to OFFLINE.');
   } catch (error) {
     console.error('[SYSTEM] Error during clean start protocol:', error);
   }

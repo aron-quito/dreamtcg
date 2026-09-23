@@ -13,7 +13,6 @@ import {
   Menu,
   X
 } from 'lucide-react';
-import { CardBuilder } from './components/CardBuilder';
 import { DeckBuilder } from './components/DeckBuilder';
 import { TestMode } from './components/TestMode';
 import { 
@@ -45,7 +44,7 @@ const INITIAL_COLLECTION: CardDefinition[] = [
     id: 'base_01',
     name: 'Dream Weaver',
     type: CardType.MONSTER,
-    level: 4,
+    level: 1,
     atk: 1800,
     def: 1200,
     attribute: CardAttribute.LIGHT,
@@ -66,20 +65,69 @@ const INITIAL_COLLECTION: CardDefinition[] = [
     id: 'base_02',
     name: 'Nightmare Shade',
     type: CardType.MONSTER,
-    level: 4,
+    level: 1,
     atk: 1500,
     def: 1500,
     attribute: CardAttribute.DARK,
-    description: 'Any time: Banish 1 card from opponent GY.',
+    description: 'Any time: Discard 1 to banish 1 card from opponent GY.',
     isCustom: false,
     effects: [
       {
         id: 'eff_02',
         name: 'Shadow Banish',
-        restriction: { locations: [CardLocation.MONSTER_ZONE], frequency: FrequencyType.UNLIMITED },
+        restriction: { locations: [], frequency: FrequencyType.UNLIMITED },
         trigger: { type: TriggerType.ANY_TIME },
         costs: [],
-        resolutions: [{ action: 'BANISH_CARD', params: { target: 'OPPONENT_GY' } }]
+        resolutions: [],
+        execute: async (ctx) => {
+          const g = JSON.parse(JSON.stringify(ctx.game));
+          const p = g.players[ctx.controllerIndex];
+          const opp = g.players[1 - ctx.controllerIndex];
+          
+          if (p.hand.length === 0) return g;
+          
+          // Cost: Discard 1
+          const discardSelection = await ctx.requestSelection(p.hand, 1, "Select 1 card to discard for cost");
+          if (discardSelection.length === 0) return g;
+          
+          const discardId = discardSelection[0];
+          p.hand = p.hand.filter((id: string) => id !== discardId);
+          p.gy.push(discardId);
+          ctx.log(`${p.name} discarded a card for Nightmare Shade's cost.`);
+          
+          // Resolution: Banish from opponent GY
+          if (opp.gy.length === 0) return g;
+          
+          const banishSelection = await ctx.requestSelection(opp.gy, 1, "Select 1 card from opponent GY to banish");
+          if (banishSelection.length === 0) return g;
+          
+          const banishId = banishSelection[0];
+          opp.gy = opp.gy.filter((id: string) => id !== banishId);
+          opp.removed.push(banishId);
+          ctx.log(`${p.name} banished a card from opponent's GY.`);
+          
+          return g;
+        }
+      }
+    ]
+  },
+  {
+    id: 'base_03',
+    name: 'Pot of Greed',
+    type: CardType.SPELL,
+    description: 'Any time: Heal 1000 LP and draw 2 cards.',
+    isCustom: false,
+    effects: [
+      {
+        id: 'eff_03',
+        name: 'Greedy Heal',
+        restriction: { locations: [], frequency: FrequencyType.UNLIMITED },
+        trigger: { type: TriggerType.ANY_TIME },
+        costs: [],
+        resolutions: [
+          { action: 'RECOVER_LP', params: { amount: 1000 } },
+          { action: 'DRAW', params: { n: 2 } }
+        ]
       }
     ]
   }
@@ -102,7 +150,7 @@ export default function App() {
   });
   const [currentRoomId, setCurrentRoomId] = useState<string | null>(null);
   const [isSpectator, setIsSpectator] = useState(false);
-  const [activeModule, setActiveModule] = useState<'HOME' | 'BUILDER' | 'DECK' | 'SHOP' | 'TEST' | 'DUEL_LOBBY' | 'DUEL_ROOM' | 'DUEL_RPS' | 'DUEL_BOARD'>('HOME');
+  const [activeModule, setActiveModule] = useState<'HOME' | 'DECK' | 'SHOP' | 'TEST' | 'DUEL_LOBBY' | 'DUEL_ROOM' | 'DUEL_RPS' | 'DUEL_BOARD'>('HOME');
 
   const [modalConfig, setModalConfig] = useState<{
     isOpen: boolean;
@@ -135,12 +183,7 @@ export default function App() {
                 setIsSpectator(isSpec);
                 setActiveModule(roomData.status === 'DUELING' ? 'DUEL_BOARD' : 'DUEL_RPS');
               } else if (roomData.status === 'LOBBY') {
-                // AUTO-LEAVE ON REFRESH (as requested)
-                await fetch(`${API_BASE}/rooms/leave`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ roomId: roomData.id, email: user.email })
-                });
+                // Suspended in lobby, do nothing. DuelLobby will show Rejoin button.
               }
             }
           }
@@ -361,7 +404,6 @@ export default function App() {
               <div className="h-8 w-[1px] bg-slate-800 mx-1" />
               <div>
                 <h1 className="text-xl font-bold tracking-tight">
-                  {activeModule === 'BUILDER' && "Custom Card Builder"}
                   {activeModule === 'DECK' && "Deck Management"}
                   {activeModule === 'TEST' && "Simulation Sandbox"}
                   {activeModule === 'DUEL_BOARD' && "Active Combat"}
@@ -391,14 +433,6 @@ export default function App() {
               onNavigateDuel={() => setActiveModule('DUEL_LOBBY')}
             />
           )}
-          {activeModule === 'BUILDER' && (
-            <CardBuilder 
-              collection={collection} 
-              onSave={handleSaveCard} 
-              onDelete={handleDeleteCard}
-              onNavigateToDeck={() => setActiveModule('DECK')}
-            />
-          )}
           {activeModule === 'DECK' && (
             <DeckBuilder 
               collection={collection} 
@@ -409,7 +443,6 @@ export default function App() {
               onDeleteDeck={handleDeleteDeck}
               onCreateDeck={handleCreateDeck}
               onSelectDeck={handleSelectDeck}
-              onNavigateToBuilder={() => setActiveModule('BUILDER')}
               hasUnsavedChanges={isDeckDirty(activeDeck)}
             />
           )}

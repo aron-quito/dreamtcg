@@ -60,6 +60,15 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
           const data = await response.json();
           setRoom(data);
 
+          // Initialize selectedDeckId if it's empty but exists in DB
+          if (data && !selectedDeckId) {
+            if (data.player1_email === userEmail && data.host_deck_id) {
+              setSelectedDeckId(data.host_deck_id);
+            } else if (data.player2_email === userEmail && data.guest_deck_id) {
+              setSelectedDeckId(data.guest_deck_id);
+            }
+          }
+
           // Transition logic
           if (data.status === 'RPS' || data.status === 'DUELING' || data.status === 'FINISHED') {
             onStartDuel({
@@ -86,7 +95,7 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
   const updateRoomState = async (updates: { deckId?: string; ready?: boolean; status?: string }) => {
     if (isSpectator) return;
     try {
-      await fetch(`${API_BASE}/rooms/update`, {
+      const response = await fetch(`${API_BASE}/rooms/update`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -95,6 +104,13 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
           ...updates 
         })
       });
+      if (!response.ok) {
+        const data = await response.json();
+        alert(data.error || "Failed to update room state");
+        if (updates.status === 'RPS' || updates.ready !== undefined) {
+           setIsReady(false);
+        }
+      }
     } catch (error) {
       console.error("Update error:", error);
     }
@@ -129,6 +145,19 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
       });
     } catch (error) {
       console.error("Leave error:", error);
+    }
+    onExit();
+  };
+
+  const handleSuspend = async () => {
+    try {
+      await fetch(`${API_BASE}/rooms/suspend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, email: userEmail })
+      });
+    } catch (error) {
+      console.error("Suspend error:", error);
     }
     onExit();
   };
@@ -179,7 +208,7 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
           onClick={handleExit}
           className="flex items-center gap-2 text-slate-500 hover:text-white transition-colors uppercase text-[10px] font-black tracking-widest group"
         >
-          <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" /> {isSpectator ? "Exit Observation" : "Cancel Duel"}
+          <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" /> {isSpectator ? "Exit Observation" : "Cancel / Exit"}
         </button>
         
         <div className="flex flex-col items-center">
@@ -221,6 +250,7 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
           email={room.player1_email}
           isReady={!!room.host_ready}
           isLocal={room.player1_email === userEmail}
+          hasSelectedDeck={!!room.host_deck_id}
           selectedDeck={validatedDecks.find(d => d.id === (room.player1_email === userEmail ? selectedDeckId : room.host_deck_id))}
           decks={validatedDecks}
           onDeckSelect={handleDeckSelect}
@@ -242,6 +272,7 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
           email={room.player2_email || "???"}
           isReady={!!room.guest_ready}
           isLocal={room.player2_email === userEmail}
+          hasSelectedDeck={!!room.guest_deck_id}
           selectedDeck={validatedDecks.find(d => d.id === (room.player2_email === userEmail ? selectedDeckId : room.guest_deck_id))}
           decks={validatedDecks}
           onDeckSelect={handleDeckSelect}
@@ -324,7 +355,7 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
   );
 }
 
-function PlayerProfile({ name, email, isReady, isLocal, selectedDeck, decks, onDeckSelect }: any) {
+function PlayerProfile({ name, email, isReady, isLocal, hasSelectedDeck, selectedDeck, decks, onDeckSelect }: any) {
   return (
     <motion.div 
       initial={{ opacity: 0, x: isLocal ? -20 : 20 }}
@@ -374,8 +405,12 @@ function PlayerProfile({ name, email, isReady, isLocal, selectedDeck, decks, onD
               ))}
             </select>
           ) : (
-            <div className="w-full bg-slate-950/50 border border-white/5 rounded-xl px-4 py-3 text-sm font-bold text-slate-400 italic">
-              {selectedDeck ? selectedDeck.name : "Selecting Deck..."}
+            <div className="w-full bg-slate-950/50 border border-white/5 rounded-xl px-4 py-3 text-sm font-bold text-slate-400 italic flex items-center justify-center">
+              {hasSelectedDeck ? (
+                 <span className="text-emerald-500">✓ Deck Selected</span>
+              ) : (
+                 <span>Selecting Deck...</span>
+              )}
             </div>
           )}
         </div>

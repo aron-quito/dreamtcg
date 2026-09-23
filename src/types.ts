@@ -41,6 +41,8 @@ export enum TriggerType {
   ON_DRAW = "ON_DRAW",
   ON_SEND_TO_GY = "ON_SEND_TO_GY",
   ON_SUMMON = "ON_SUMMON",
+  ON_FLIP = "ON_FLIP",
+  IGNITION = "IGNITION",
 }
 
 export enum FrequencyType {
@@ -82,8 +84,10 @@ export interface CardEffect {
   name: string;
   restriction: Restriction;
   trigger: Trigger;
-  costs: Cost[];
-  resolutions: Resolution[];
+  costs?: Cost[];
+  resolutions?: Resolution[];
+  execute?: (ctx: any) => any | Promise<any>;
+  canActivate?: (game: any, controllerIndex: number) => boolean;
 }
 
 export interface CardDefinition {
@@ -123,6 +127,9 @@ export interface PlayerState {
   extraDeck: string[];
   attacksMade: Record<string, number>; // instanceId -> count
   negatedInstances: string[]; // instanceIds with negated effects
+  dreamSummonUsedThisTurn?: boolean;
+  dreamSummonedInstanceId?: string | null;
+  salvationUsedThisTurn?: boolean;
 }
 
 export interface DeckDefinition {
@@ -132,11 +139,32 @@ export interface DeckDefinition {
   extraCards: string[]; // IDs
 }
 
+export interface PendingChainLink {
+  instanceId: string;
+  effectId: string;
+  controllerIndex: number;
+  costPaid?: boolean;
+}
+
+export interface ChainPriority {
+  playerIndex: number; // The player whose turn it is to respond, or to resolve a link if isResolving is true
+  passCount: number;   // How many consecutive passes have occurred
+  isResolving?: boolean; // If true, the chain is currently resolving step-by-step
+}
+
 export interface GameState {
   players: [PlayerState, PlayerState];
   turn: number;
   phase: GamePhase;
   activePlayerIndex: number;
   firstPlayerIndex: number; // Index of the player who started the duel
-  chain: string[]; // Stack of effect IDs
+  chain: string[]; // Legacy (unused)
+  pendingChain?: PendingChainLink[];
+  chainPriority?: ChainPriority;
+  salvationPrompt?: string; // attacker instanceId (legacy)
+  directAttackPrompt?: string; // attacker instanceId
+  pendingAttack?: {
+    attackerId: string;
+    targetId: string | 'DIRECT';
+  };
 }

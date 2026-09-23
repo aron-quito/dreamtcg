@@ -36,6 +36,8 @@ import { ActionRegistry } from "./actions";
 
 // Side-effect: import actions so they self-register when this module is loaded
 import "./actions";
+import { CardRegistry } from "./scripts/registry";
+import "./scripts/base_cards";
 
 // ─── Frequency tracking (counters for X per turn / per duel) ──────────────────
 
@@ -62,7 +64,7 @@ function buildContext(
 ): EngineContext {
   const getCardDef = (instanceId: string | null): CardDefinition | null => {
     if (!instanceId) return null;
-    const cardId = instanceId.split("_")[0];
+    const cardId = instanceId.substring(0, instanceId.lastIndexOf("_"));
     return cardDefs.get(cardId) ?? null;
   };
 
@@ -180,6 +182,11 @@ export class EffectEngine {
     resetTurnTracking();
   }
 
+  /** Get a card definition by ID from the engine's registry */
+  getCardDef(cardId: string): CardDefinition | undefined {
+    return this.cardDefs.get(cardId);
+  }
+
   // ─── Public: Emit an event ──────────────────────────────────────────────
 
   async emit(
@@ -220,15 +227,15 @@ export class EffectEngine {
         ] as string[];
 
         for (const instanceId of allInstances) {
-          const cardId = instanceId.split("_")[0];
+          const cardId = instanceId.substring(0, instanceId.lastIndexOf("_"));
           const cardDef = this.cardDefs.get(cardId);
           if (!cardDef) continue;
           if (p.negatedInstances?.includes(instanceId)) continue;
 
-          for (const effect of cardDef.effects) {
-            const isMatch = (effect.trigger.type === triggerType) || 
-                            (effect.trigger.type === TriggerType.ANY_TIME && 
-                             (triggerType === TriggerType.ON_ACTIVATION || triggerType === TriggerType.ON_SUMMON));
+          const effects = CardRegistry.getEffects(cardId);
+          const activeEffects = effects.length > 0 ? effects : (cardDef.effects || []);
+          for (const effect of activeEffects) {
+            const isMatch = (effect.trigger.type === triggerType);
             
             if (!isMatch) continue;
 
@@ -250,6 +257,8 @@ export class EffectEngine {
             const used = (effect.restriction.frequency === FrequencyType.ONCE_PER_DUEL ? usedThisDuel : usedThisTurn).get(freqKey) || 0;
             if (used >= maxUses) continue;
 
+            if (effect.canActivate && !effect.canActivate(game, pi)) continue;
+
             candidateLinks.push({
               linkNumber: candidateLinks.length + 1,
               instanceId,
@@ -261,52 +270,27 @@ export class EffectEngine {
         }
       }
 
-      if (candidateLinks.length === 0) {
-        return game;
-      }
-
-      // 3. Resolve Chain (LIFO)
-      const chain = [...candidateLinks];
-      while (chain.length > 0) {
-        const link = chain.pop()!;
-        const ctx = buildContext(game, this.cardDefs, link.controllerIndex, link.instanceId, link.cardDef, link.effect, log, requestSelection);
-        
-        // Resolve costs
-        for (const cost of link.effect.costs) {
-          const fn = ActionRegistry.getAction(cost.action);
-          if (fn) game = await fn(ctx, cost.params);
-        }
-        
-        // Resolve resolutions
-        for (const res of link.effect.resolutions) {
-          const fn = ActionRegistry.getAction(res.action);
-          if (fn) game = await fn(ctx, res.params);
-          else log(`Unknown action: ${res.action}`, "system");
-        }
-
-        // Mark frequency
-        const cardId = link.instanceId.split("_")[0];
-        const scopeId = link.effect.restriction.hardOncePerTurn ? cardId : link.instanceId;
-        const freqKey = `${scopeId}:${link.effect.id}`;
-        usedThisTurn.set(freqKey, (usedThisTurn.get(freqKey) || 0) + 1);
-        usedThisDuel.set(freqKey, (usedThisDuel.get(freqKey) || 0) + 1);
-      }
-
-      // 4. Final Cleanup (Spells to GY)
+      // 3. Build Pending Chain and Pass Priority
+      game.pendingChain = game.pendingChain || [];
       for (const link of candidateLinks) {
-        if (link.cardDef.type === "SPELL") {
-          const p = game.players[link.controllerIndex];
-          const sIdx = p.spellZones.indexOf(link.instanceId);
-          if (sIdx !== -1) {
-            p.spellZones[sIdx] = null;
-            p.gy.push(link.instanceId);
-            log(`${link.cardDef.name} resolved and was sent to GY.`, "system");
-          }
-        }
+        game.pendingChain.push({
+          instanceId: link.instanceId,
+          effectId: link.effect.id,
+          controllerIndex: link.controllerIndex
+        });
       }
 
-      log("--- Chain Closed ---", "chain");
+      // As requested by the user: Whenever a player takes an action (Summon, Activate, etc),
+      // the opponent ALWAYS gets the first chance to respond (priority).
+      const priorityPlayer = 1 - (triggerParams.controllerIndex ?? game.activePlayerIndex);
+
+      game.chainPriority = {
+        playerIndex: priorityPlayer,
+        passCount: 0
+      };
+
       return game;
+
 
     } catch (err) {
       console.error("Engine Crash:", err);
@@ -316,32 +300,277 @@ export class EffectEngine {
 
   // ─── Public: Manually add a card effect to the current chain ───────────
 
-  /**
-   * Used when a player manually activates a card effect (Quick Effect, etc.)
-   * Returns the link number assigned.
-   */
   addToChain(
     instanceId: string,
     effectId: string,
-    currentGame: SyncedGameState
-  ): ChainLink | null {
-    const cardId = instanceId.split("_")[0];
+    currentGame: SyncedGameState,
+    costPaid: boolean = false
+  ): SyncedGameState {
+    let game: SyncedGameState = JSON.parse(JSON.stringify(currentGame));
+    
+    const cardId = instanceId.substring(0, instanceId.lastIndexOf("_"));
     const cardDef = this.cardDefs.get(cardId);
-    if (!cardDef) return null;
+    if (!cardDef) return game;
 
-    const effect = cardDef.effects.find(e => e.id === effectId);
-    if (!effect) return null;
+    const registryEffects = CardRegistry.getEffects(cardId);
+    const activeEffects = registryEffects.length > 0 ? registryEffects : (cardDef.effects || []);
+    
+    const effect = activeEffects.find(e => e.id === effectId);
+    if (!effect) return game;
 
-    const controllerIndex = getControllerIndex(currentGame, instanceId) ?? 0;
-    const link: ChainLink = {
-      linkNumber: this.chain.length + 1,
+    const controllerIndex = getControllerIndex(game, instanceId) ?? 0;
+    
+    game.pendingChain = game.pendingChain || [];
+    game.pendingChain.push({
       instanceId,
-      cardDef,
-      effect,
+      effectId,
       controllerIndex,
+      costPaid,
+    });
+    
+    return game;
+  }
+
+  /**
+   * Activates an effect manually from the field, passes priority to opponent.
+   */
+  async activateManualEffect(
+    instanceId: string,
+    effectId: string,
+    currentGame: SyncedGameState
+  ): Promise<SyncedGameState> {
+    const controllerIndex = getControllerIndex(currentGame, instanceId) ?? 0;
+    const player = currentGame.players[controllerIndex];
+    if (player.negatedInstances?.includes(instanceId)) {
+      console.warn(`Attempted to activate negated instance ${instanceId}`);
+      return currentGame;
+    }
+    
+    let game = this.addToChain(instanceId, effectId, currentGame);
+    
+    game.chainPriority = {
+      playerIndex: 1 - controllerIndex,
+      passCount: 0
     };
-    this.chain.push(link);
-    return link;
+    
+    return game;
+  }
+
+  /**
+   * Passes priority to the next player. If both passed, enters RESOLVING state.
+   */
+  async passPriority(
+    currentGame: SyncedGameState,
+    requestSelection?: (options: string[], count: number, message: string) => Promise<string[]>
+  ): Promise<SyncedGameState> {
+    let game: SyncedGameState = JSON.parse(JSON.stringify(currentGame));
+    if (!game.chainPriority) return game;
+    
+    game.chainPriority.passCount += 1;
+    if (game.chainPriority.passCount >= 2) {
+      // Both passed, start step-by-step resolution
+      if (!game.pendingChain || game.pendingChain.length === 0) {
+        // Empty chain, just clear priority
+        game.chainPriority = undefined;
+        return game;
+      }
+      game.chainPriority.isResolving = true;
+      // Set playerIndex to the controller of the LAST link (LIFO)
+      game.chainPriority.playerIndex = game.pendingChain[game.pendingChain.length - 1].controllerIndex;
+    } else {
+      // Pass back to opponent
+      game.chainPriority.playerIndex = 1 - game.chainPriority.playerIndex;
+    }
+    
+    return game;
+  }
+
+  /**
+   * Resolves ONE link from the pending chain (LIFO)
+   */
+  async resolveNextLink(
+    currentGame: SyncedGameState,
+    requestSelection?: (options: string[], count: number, message: string) => Promise<string[]>
+  ): Promise<SyncedGameState> {
+    let game: SyncedGameState = JSON.parse(JSON.stringify(currentGame));
+    const log = (msg: string, type = "effect") => {
+      if (!game.logs) game.logs = [];
+      game.logs.push({ id: Date.now() + Math.random(), msg, type });
+      if (game.logs.length > 40) game.logs.shift();
+    };
+
+    if (!game.pendingChain || game.pendingChain.length === 0) {
+      game.chainPriority = undefined;
+      return game;
+    }
+
+    // Pop the last link (LIFO)
+    const pLink = game.pendingChain.pop()!;
+    const cardId = pLink.instanceId.substring(0, pLink.instanceId.lastIndexOf("_"));
+    const cardDef = this.cardDefs.get(cardId);
+
+    if (cardDef) {
+      const registryEffects = CardRegistry.getEffects(cardId);
+      const activeEffects = registryEffects.length > 0 ? registryEffects : (cardDef.effects || []);
+      const effect = activeEffects.find(e => e.id === pLink.effectId);
+
+      if (effect) {
+        log(`Resolving Chain Link: ${cardDef.name}`, "chain");
+
+        const ctx = buildContext(
+          game, 
+          this.cardDefs, 
+          pLink.controllerIndex as 0 | 1, 
+          pLink.instanceId, 
+          cardDef, 
+          effect, 
+          log, 
+          requestSelection
+        );
+
+        // Resolve costs and resolutions
+        if (effect.execute) {
+          game = await effect.execute(ctx);
+        } else {
+          // Legacy AST execution
+          if (!pLink.costPaid) {
+            for (const cost of effect.costs || []) {
+              const fn = ActionRegistry.getAction(cost.action);
+              if (fn) game = await fn({ ...ctx, game }, cost.params);
+            }
+          }
+          for (const res of effect.resolutions || []) {
+            const fn = ActionRegistry.getAction(res.action);
+            if (fn) game = await fn({ ...ctx, game }, res.params);
+            else log(`Unknown action: ${res.action}`, "system");
+          }
+        }
+
+        // Mark frequency
+        const scopeId = effect.restriction.hardOncePerTurn ? cardId : pLink.instanceId;
+        const freqKey = `${scopeId}:${effect.id}`;
+        usedThisTurn.set(freqKey, (usedThisTurn.get(freqKey) || 0) + 1);
+        usedThisDuel.set(freqKey, (usedThisDuel.get(freqKey) || 0) + 1);
+
+        // Spell cleanup for this specific link
+        if (cardDef.type === "SPELL") {
+          const p = game.players[pLink.controllerIndex];
+          const sIdx = p.spellZones.indexOf(pLink.instanceId);
+          if (sIdx !== -1) {
+            p.spellZones[sIdx] = null;
+            p.gy.push(pLink.instanceId);
+            log(`${cardDef.name} was sent to GY.`, "system");
+          }
+        }
+      }
+    }
+
+    // Prepare for next link or close chain
+    if (game.pendingChain.length > 0) {
+      // Set playerIndex to the controller of the NEW last link
+      game.chainPriority!.playerIndex = game.pendingChain[game.pendingChain.length - 1].controllerIndex;
+    } else {
+      game.chainPriority = undefined;
+      log("--- Chain Closed ---", "chain");
+    }
+
+    return game;
+  }
+
+  /**
+   * Resolves the current chain in LIFO order
+   */
+  async resolveChain(
+    currentGame: SyncedGameState,
+    requestSelection?: (options: string[], count: number, message: string) => Promise<string[]>
+  ): Promise<SyncedGameState> {
+    let game: SyncedGameState = JSON.parse(JSON.stringify(currentGame));
+    const log = (msg: string, type = "effect") => {
+      if (!game.logs) game.logs = [];
+      game.logs.push({ id: Date.now() + Math.random(), msg, type });
+      if (game.logs.length > 40) game.logs.shift();
+    };
+
+    if (!game.pendingChain || game.pendingChain.length === 0) return game;
+    log("--- Resolving Chain ---", "chain");
+    
+    const chainLinks: ChainLink[] = [];
+    for (let i = 0; i < game.pendingChain.length; i++) {
+        const pLink = game.pendingChain[i];
+        const cardId = pLink.instanceId.substring(0, pLink.instanceId.lastIndexOf("_"));
+        const cardDef = this.cardDefs.get(cardId);
+        if (!cardDef) continue;
+        
+        const registryEffects = CardRegistry.getEffects(cardId);
+        const activeEffects = registryEffects.length > 0 ? registryEffects : (cardDef.effects || []);
+        const effect = activeEffects.find(e => e.id === pLink.effectId);
+        if (!effect) continue;
+        
+        chainLinks.push({
+            linkNumber: i + 1,
+            instanceId: pLink.instanceId,
+            cardDef,
+            effect,
+            controllerIndex: pLink.controllerIndex as 0 | 1
+        });
+    }
+
+    const originalChain = [...chainLinks]; // Track for cleanup
+    
+    while (chainLinks.length > 0) {
+      const link = chainLinks.pop()!;
+      const ctx = buildContext(game, this.cardDefs, link.controllerIndex, link.instanceId, link.cardDef, link.effect, log, requestSelection);
+      
+      // Check if costs were already paid at activation time
+      const pLink = game.pendingChain ? game.pendingChain.find(
+        p => p.instanceId === link.instanceId && p.effectId === link.effect.id
+      ) : null;
+      const alreadyPaidCost = pLink?.costPaid ?? false;
+
+      // Resolve costs and resolutions
+      if (link.effect.execute) {
+        game = await link.effect.execute(ctx);
+      } else {
+        // Legacy AST execution — skip costs if already paid
+        if (!alreadyPaidCost) {
+          for (const cost of link.effect.costs || []) {
+            const fn = ActionRegistry.getAction(cost.action);
+            if (fn) game = await fn({ ...ctx, game }, cost.params);
+          }
+        }
+        for (const res of link.effect.resolutions || []) {
+          const fn = ActionRegistry.getAction(res.action);
+          if (fn) game = await fn({ ...ctx, game }, res.params);
+          else log(`Unknown action: ${res.action}`, "system");
+        }
+      }
+
+      // Mark frequency
+      const cardId = link.instanceId.substring(0, link.instanceId.lastIndexOf("_"));
+      const scopeId = link.effect.restriction.hardOncePerTurn ? cardId : link.instanceId;
+      const freqKey = `${scopeId}:${link.effect.id}`;
+      usedThisTurn.set(freqKey, (usedThisTurn.get(freqKey) || 0) + 1);
+      usedThisDuel.set(freqKey, (usedThisDuel.get(freqKey) || 0) + 1);
+    }
+
+    // Final Cleanup (Spells to GY)
+    for (const link of originalChain) {
+      if (link.cardDef.type === "SPELL") {
+        const p = game.players[link.controllerIndex];
+        const sIdx = p.spellZones.indexOf(link.instanceId);
+        if (sIdx !== -1) {
+          p.spellZones[sIdx] = null;
+          p.gy.push(link.instanceId);
+          log(`${link.cardDef.name} resolved and was sent to GY.`, "system");
+        }
+      }
+    }
+
+    game.pendingChain = [];
+    game.chainPriority = undefined;
+
+    log("--- Chain Closed ---", "chain");
+    return game;
   }
 
   /** Current chain depth (useful for the UI chain indicator) */
@@ -352,5 +581,38 @@ export class EffectEngine {
   /** Get a snapshot of the current chain for UI rendering */
   get chainSnapshot(): ChainLink[] {
     return [...this.chain];
+  }
+
+  /**
+   * Build a snapshot of the pending chain for UI animations.
+   * Returns chain links with card defs and names for rendering
+   * the chain overview and per-link resolution animations.
+   */
+  getChainSnapshot(game: SyncedGameState): Array<{
+    chainNumber: number;
+    instanceId: string;
+    cardName: string;
+    cardDef: CardDefinition;
+    controllerIndex: number;
+    playerName: string;
+    effectName: string;
+  }> {
+    if (!game.pendingChain || game.pendingChain.length === 0) return [];
+    return game.pendingChain.map((pLink, i) => {
+      const cardId = pLink.instanceId.substring(0, pLink.instanceId.lastIndexOf("_"));
+      const cardDef = this.cardDefs.get(cardId);
+      const registryEffects = CardRegistry.getEffects(cardId);
+      const activeEffects = registryEffects.length > 0 ? registryEffects : (cardDef?.effects || []);
+      const effect = activeEffects.find(e => e.id === pLink.effectId);
+      return {
+        chainNumber: i + 1,
+        instanceId: pLink.instanceId,
+        cardName: cardDef?.name || 'Unknown',
+        cardDef: cardDef!,
+        controllerIndex: pLink.controllerIndex,
+        playerName: game.players[pLink.controllerIndex]?.name || 'Player',
+        effectName: effect?.name || 'Effect',
+      };
+    });
   }
 }
