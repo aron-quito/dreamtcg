@@ -38,7 +38,7 @@ app.post('/api/auth/register', (req, res) => {
   try {
     const insert = db.prepare('INSERT INTO users (email, name, password) VALUES (?, ?, ?)');
     insert.run(email, name, password);
-    res.json({ success: true, user: { email, name } });
+    res.json({ success: true, user: { email, name, coins: 1000 } });
   } catch (error) {
     res.status(500).json({ error: 'Email already exists or invalid data' });
   }
@@ -50,7 +50,7 @@ app.post('/api/auth/login', (req, res) => {
     const user = db.prepare('SELECT * FROM users WHERE email = ? AND password = ?').get(email, password) as any;
     if (user) {
       logUserAction(email, 'LOGIN');
-      res.json({ success: true, user: { email: user.email, name: user.name } });
+      res.json({ success: true, user: { email: user.email, name: user.name, coins: user.coins } });
     } else {
       res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -137,6 +137,74 @@ app.delete('/api/cards/:id', (req, res) => {
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete card' });
+  }
+});
+
+// --- PHYSICAL CARDS ENDPOINTS ---
+
+app.get('/api/physical-cards', (req, res) => {
+  const userEmail = req.query.userEmail as string;
+  if (!userEmail) return res.status(400).json({ error: 'User context required' });
+  try {
+    const cards = db.prepare('SELECT * FROM physical_cards WHERE owner_email = ? ORDER BY created_at DESC').all(userEmail);
+    const mappedCards = cards.map((c: any) => ({
+      id: c.id,
+      templateId: c.template_id,
+      ownerEmail: c.owner_email,
+      quality: c.quality,
+      durability: c.durability,
+      maxDurability: c.max_durability,
+      originalOwner: c.original_owner,
+      serialNumber: c.serial_number,
+      winCount: c.win_count,
+      createdAt: c.created_at
+    }));
+    res.json(mappedCards);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch physical cards' });
+  }
+});
+
+app.post('/api/physical-cards', (req, res) => {
+  const { templateId, ownerEmail, quality } = req.body;
+  try {
+    const id = Math.random().toString(36).substr(2, 9);
+    const maxDurability = quality === 'NORMAL' ? 5 : quality === 'SPECIAL' ? 10 : 15;
+    
+    db.prepare(`
+      INSERT INTO physical_cards (id, template_id, owner_email, quality, durability, max_durability)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(id, templateId, ownerEmail, quality, maxDurability, maxDurability);
+    
+    res.json({ success: true, card: { id, templateId, ownerEmail, quality, durability: maxDurability, maxDurability } });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to create physical card' });
+  }
+});
+
+
+
+app.delete('/api/physical-cards/:id', (req, res) => {
+  const { userEmail } = req.body;
+  try {
+    const card = db.prepare('SELECT * FROM physical_cards WHERE id = ? AND owner_email = ?').get(req.params.id, userEmail) as any;
+    if (!card) return res.status(404).json({ error: 'Card not found' });
+    if (card.durability > 0) return res.status(400).json({ error: 'Only broken cards can be deleted' });
+
+    db.prepare('DELETE FROM physical_cards WHERE id = ?').run(req.params.id);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete card' });
+  }
+});
+
+// Get User Profile
+app.get('/api/users/:email', (req, res) => {
+  try {
+    const user = db.prepare('SELECT email, name, status, coins FROM users WHERE email = ?').get(req.params.email) as any;
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get user' });
   }
 });
 
@@ -418,9 +486,10 @@ app.get('/api/rooms/active', (req, res) => {
   try {
     const room = db.prepare(`
       SELECT * FROM rooms 
-      WHERE (player1_email = ? OR player2_email = ? OR spectator1_email = ? OR spectator2_email = ?)
+      WHERE (host_email = ? OR player1_email = ? OR player2_email = ? OR spectator1_email = ? OR spectator2_email = ?)
+      AND status != 'FINISHED'
       ORDER BY updated_at DESC LIMIT 1
-    `).get(email, email, email, email) as any;
+    `).get(email, email, email, email, email) as any;
     res.json(room || null);
   } catch (error) {
     res.status(500).json({ error: 'Failed to find active room' });
@@ -535,12 +604,32 @@ app.post('/api/rooms/update', (req, res) => {
 
     if (status === 'RPS') {
       // Validate that both decks exist before starting
-      const hostDeck = db.prepare('SELECT id FROM decks WHERE id = ?').get(room.host_deck_id);
-      const guestDeck = db.prepare('SELECT id FROM decks WHERE id = ?').get(room.guest_deck_id);
+      const hostDeck = db.prepare('SELECT main_cards FROM decks WHERE id = ?').get(room.host_deck_id) as any;
+      const guestDeck = db.prepare('SELECT main_cards FROM decks WHERE id = ?').get(room.guest_deck_id) as any;
       
       if (!hostDeck || !guestDeck) {
         return res.status(400).json({ error: 'One or both players have selected an invalid or deleted deck. Please refresh the page and select a valid deck.' });
       }
+
+      // Legal Deck Validation
+      const validateDeck = (deckRaw: string, email: string) => {
+         const cardIds = JSON.parse(deckRaw) as string[];
+         if (cardIds.length === 0 || cardIds.length > 60) return false;
+         for (const id of cardIds) {
+            const pc = db.prepare('SELECT durability FROM physical_cards WHERE id = ? AND owner_email = ?').get(id, email) as any;
+            if (!pc) return false; // Missing physical copy (it's a mold, proxy, or belongs to someone else)
+            if (pc.durability <= 0) return false; // Broken card
+         }
+         return true;
+      };
+
+      if (!validateDeck(hostDeck.main_cards, room.player1_email)) {
+         return res.status(400).json({ error: 'Host deck is illegal. Ensure all cards are physical, owned, and not broken.' });
+      }
+      if (!validateDeck(guestDeck.main_cards, room.player2_email)) {
+         return res.status(400).json({ error: 'Guest deck is illegal. Ensure all cards are physical, owned, and not broken.' });
+      }
+
       db.prepare('UPDATE rooms SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, roomId);
     } else if (status) {
       db.prepare('UPDATE rooms SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, roomId);
@@ -644,7 +733,180 @@ app.post('/api/rooms/game/update', (req, res) => {
     res.status(500).json({ error: 'Failed to update game' });
   }
 });
+// Finish Game and Apply Mass Durability Update
+app.post('/api/rooms/game/finish', (req, res) => {
+  const { roomId, loserEmail, loserDeckId, winnerEmail, winnerDeckId } = req.body;
+  try {
+    const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId) as any;
+    if (!room) return res.status(404).json({ error: 'Room not found' });
+    if (room.status === 'FINISHED') return res.json({ success: true, message: 'Already finished' });
 
+    const processDeck = (email: string, deckId: string, isWinner: boolean) => {
+      const deck = db.prepare('SELECT main_cards FROM decks WHERE id = ? AND user_email = ?').get(deckId, email) as any;
+      if (!deck) return;
+      const cardIds = JSON.parse(deck.main_cards) as string[];
+      if (cardIds.length === 0) return;
+
+      const placeholders = cardIds.map(() => '?').join(',');
+      const cards = db.prepare(`SELECT * FROM physical_cards WHERE id IN (${placeholders})`).all(...cardIds) as any[];
+
+      for (const card of cards) {
+        if (isWinner) {
+          // Increment win_count and check for recovery
+          db.prepare('UPDATE physical_cards SET win_count = win_count + 1 WHERE id = ?').run(card.id);
+          const newWinCount = card.win_count + 1;
+          
+          let recover = false;
+          if (card.quality === 'SPECIAL' && newWinCount % 3 === 0) recover = true;
+          if (card.quality === 'EPIC' && newWinCount % 2 === 0) recover = true;
+
+          if (recover && card.durability < card.max_durability) {
+            db.prepare('UPDATE physical_cards SET durability = durability + 1 WHERE id = ?').run(card.id);
+          }
+        } else {
+          // Decrement durability
+          if (card.quality !== 'ULTRA') { // Ultra is indestructible
+            db.prepare('UPDATE physical_cards SET durability = durability - 1 WHERE id = ?').run(card.id);
+            const newDurability = card.durability - 1;
+            if (newDurability <= 0) {
+              // Card is destroyed!
+              db.prepare('DELETE FROM physical_cards WHERE id = ?').run(card.id);
+              
+              // Auto-replace the broken card in ALL of the user's decks
+              const otherCopies = db.prepare('SELECT id FROM physical_cards WHERE template_id = ? AND owner_email = ? AND durability > 0').all(card.template_id, email) as any[];
+              const allDecks = db.prepare('SELECT id, main_cards FROM decks WHERE user_email = ?').all(email) as any[];
+              
+              for (const userDeck of allDecks) {
+                let deckCards: string[] = JSON.parse(userDeck.main_cards);
+                let changed = false;
+                
+                for (let i = 0; i < deckCards.length; i++) {
+                  if (deckCards[i] === card.id) {
+                    changed = true;
+                    const availableCopy = otherCopies.find(c => !deckCards.includes(c.id));
+                    if (availableCopy) {
+                      deckCards[i] = availableCopy.id;
+                    } else {
+                      deckCards[i] = card.template_id; // Fallback to ghost copy
+                    }
+                  }
+                }
+                
+                if (changed) {
+                  db.prepare('UPDATE decks SET main_cards = ? WHERE id = ?').run(JSON.stringify(deckCards), userDeck.id);
+                }
+              }
+            }
+          }
+        }
+      }
+    };
+
+    if (loserEmail && loserDeckId) processDeck(loserEmail, loserDeckId, false);
+    if (winnerEmail && winnerDeckId) processDeck(winnerEmail, winnerDeckId, true);
+    
+    // 2. Mark room as finished
+    db.prepare('UPDATE rooms SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run('FINISHED', roomId);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('FINISH GAME ERROR:', error);
+    res.status(500).json({ error: 'Failed to finish game and update durability' });
+  }
+});
+
+// Shop - Buy a Pack
+app.post('/api/shop/buy-pack', (req, res) => {
+  const { userEmail } = req.body;
+  try {
+    const user = db.prepare('SELECT coins FROM users WHERE email = ?').get(userEmail) as any;
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.coins < 100) return res.status(400).json({ error: 'Not enough coins. Need 100.' });
+
+    // Deduct coins
+    db.prepare('UPDATE users SET coins = coins - 100 WHERE email = ?').run(userEmail);
+
+    // Get 5 random card molds
+    const allCards = db.prepare('SELECT id, can_be_ultra FROM cards').all() as any[];
+    if (allCards.length === 0) return res.status(400).json({ error: 'No cards available in the game to pull.' });
+
+    const pulledCards = [];
+    for (let i = 0; i < 5; i++) {
+      const randomCard = allCards[Math.floor(Math.random() * allCards.length)];
+      
+      // Determine Quality
+      const rand = Math.random();
+      let quality = 'NORMAL';
+      let maxDurability = 5;
+      
+      if (rand < 0.7999) {
+        quality = 'NORMAL';
+        maxDurability = 5;
+      } else if (rand < 0.9499) {
+        quality = 'SPECIAL';
+        maxDurability = 10;
+      } else if (rand < 0.9999) {
+        quality = 'EPIC';
+        maxDurability = 15;
+      } else {
+        quality = 'ULTRA';
+        maxDurability = 999999;
+      }
+
+      let serialNumber = null;
+      if (quality === 'ULTRA') {
+        if (!randomCard.can_be_ultra) {
+          quality = 'EPIC';
+          maxDurability = 15;
+        } else {
+          const ultraCount = db.prepare('SELECT COUNT(*) as c FROM physical_cards WHERE template_id = ? AND quality = "ULTRA"').get(randomCard.id) as any;
+          if (ultraCount.c >= 1000) {
+            quality = 'EPIC';
+            maxDurability = 15;
+          } else {
+            serialNumber = ultraCount.c + 1;
+          }
+        }
+      }
+
+      const newId = crypto.randomUUID();
+      const insertData = {
+         id: newId,
+         template_id: randomCard.id,
+         owner_email: userEmail,
+         quality,
+         durability: maxDurability,
+         max_durability: maxDurability,
+         original_owner: userEmail,
+         serial_number: serialNumber,
+         win_count: 0
+      };
+
+      db.prepare(`
+         INSERT INTO physical_cards (id, template_id, owner_email, quality, durability, max_durability, original_owner, serial_number, win_count)
+         VALUES (@id, @template_id, @owner_email, @quality, @durability, @max_durability, @original_owner, @serial_number, @win_count)
+      `).run(insertData);
+
+      pulledCards.push({
+         id: newId,
+         templateId: randomCard.id,
+         ownerEmail: userEmail,
+         quality,
+         durability: maxDurability,
+         maxDurability: maxDurability,
+         originalOwner: userEmail,
+         serialNumber,
+         winCount: 0,
+         createdAt: new Date().toISOString()
+      });
+    }
+
+    res.json({ success: true, cards: pulledCards });
+  } catch (error) {
+    console.error('BUY PACK ERROR:', error);
+    res.status(500).json({ error: 'Failed to buy pack' });
+  }
+});
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`DreamTCG Backend running at http://0.0.0.0:${PORT}`);
 });

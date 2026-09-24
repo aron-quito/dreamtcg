@@ -53,10 +53,9 @@ export function DuelLobby({ userEmail, onRoomCreated, onRoomJoined, onBack }: Du
   const fetchData = async () => {
     setIsLoadingRooms(true);
     try {
-      const [roomsRes, onlineRes, activeRoomRes] = await Promise.all([
+      const [roomsRes, onlineRes] = await Promise.all([
         fetch(`${API_BASE}/rooms`),
-        fetch(`${API_BASE}/users/online`),
-        fetch(`${API_BASE}/rooms/active?email=${userEmail}`)
+        fetch(`${API_BASE}/users/online`)
       ]);
 
       if (roomsRes.ok) {
@@ -64,16 +63,21 @@ export function DuelLobby({ userEmail, onRoomCreated, onRoomJoined, onBack }: Du
         const rawRooms = Array.isArray(data) ? data : (data.rooms || []);
         const activeRooms = rawRooms.filter((r: any) => r.id && (r.host_email || r.host_name));
         setRooms(activeRooms);
+        
+        // Derive active room synchronously
+        const myRoom = activeRooms.find((r: any) => 
+          r.player1_email === userEmail || 
+          r.player2_email === userEmail || 
+          r.spectator1_email === userEmail || 
+          r.spectator2_email === userEmail ||
+          r.host_email === userEmail
+        );
+        setActiveRoom(myRoom || null);
       }
 
       if (onlineRes.ok) {
         const users = await onlineRes.json();
         setOnlineUsers(users);
-      }
-
-      if (activeRoomRes.ok) {
-        const room = await activeRoomRes.json();
-        setActiveRoom(room);
       }
     } catch (error) {
       console.error("Failed to fetch data:", error);
@@ -238,6 +242,7 @@ export function DuelLobby({ userEmail, onRoomCreated, onRoomJoined, onBack }: Du
                    {rooms.length > 0 ? rooms.map((room) => {
                      const isDuel = room.status === 'DUELING';
                      const isFull = room.player_count >= 2;
+                     const isMyRoom = activeRoom?.id === room.id;
 
                      return (
                        <motion.div 
@@ -276,18 +281,22 @@ export function DuelLobby({ userEmail, onRoomCreated, onRoomJoined, onBack }: Du
 
                            <div className="flex flex-col gap-3">
                              <button 
-                               onClick={() => handleJoinRoom(room.id, isFull)}
-                               disabled={isJoining || (isFull && room.spectators >= 2)}
+                               onClick={() => isMyRoom ? onRoomJoined(room.id) : handleJoinRoom(room.id, isFull)}
+                               disabled={isJoining || (!isMyRoom && isFull && room.spectators >= 2)}
                                className={`w-full py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-3 transition-all ${
-                                 isFull
+                                 isMyRoom
+                                 ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/20 hover:bg-emerald-500'
+                                 : isFull
                                  ? (room.spectators >= 2 ? 'bg-slate-800 text-slate-600 cursor-not-allowed opacity-50' : 'bg-amber-500/10 hover:bg-amber-500 text-amber-500 hover:text-white border border-amber-500/20 shadow-lg shadow-amber-900/20') 
                                  : 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/20 hover:bg-indigo-500'
                                }`}
                              >
-                                {isFull 
+                                {isMyRoom
+                                  ? 'Rejoin Room'
+                                  : isFull 
                                   ? (room.spectators >= 2 ? 'Room Fully Occupied' : 'Observe Duel') 
                                   : (isDuel ? 'Resume Duel' : 'Enter Arena')}
-                                {isFull ? <Globe className="w-4 h-4" /> : <ArrowRight className="w-4 h-4" />}
+                                {isFull && !isMyRoom ? <Globe className="w-4 h-4" /> : <ArrowRight className="w-4 h-4" />}
                              </button>
                            </div>
                        </motion.div>

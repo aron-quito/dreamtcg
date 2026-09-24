@@ -1,5 +1,5 @@
 import React from 'react';
-import { Package, Moon, Sun, Flame, Droplets, Mountain, Wind } from 'lucide-react';
+import { Package, Moon, Sun, Flame, Droplets, Mountain, Wind, Sparkles } from 'lucide-react';
 import { CardDefinition, CardType, TriggerType, CardLocation, FrequencyType, CardEffect } from '../types';
 
 // --- HELPER TRANSLATIONS ---
@@ -29,7 +29,7 @@ const POS_MAP: Record<string, string> = {
 
 const ATTR_MAP: Record<string, string> = {
   "DARK": "OSCURIDAD", "LIGHT": "LUZ", "EARTH": "TIERRA",
-  "WATER": "AGUA", "FIRE": "FUEGO", "WIND": "VIENTO"
+  "WATER": "AGUA", "FIRE": "FUEGO", "WIND": "VIENTO", "NONE": "HECHIZO/TRAMPA"
 };
 
 const ATTRIBUTE_STYLES: Record<string, { bg: string, text: string, border: string, icon: any, shadow: string }> = {
@@ -39,23 +39,27 @@ const ATTRIBUTE_STYLES: Record<string, { bg: string, text: string, border: strin
   "WATER": { bg: "bg-blue-950/60", text: "text-blue-400", border: "border-blue-500/40", icon: Droplets, shadow: "shadow-blue-500/20" },
   "EARTH": { bg: "bg-amber-950/60", text: "text-amber-600", border: "border-amber-800/40", icon: Mountain, shadow: "shadow-amber-800/20" },
   "WIND": { bg: "bg-emerald-950/60", text: "text-green-400", border: "border-green-500/40", icon: Wind, shadow: "shadow-green-500/20" },
+  "NONE": { bg: "bg-emerald-900/60", text: "text-emerald-400", border: "border-emerald-500/40", icon: Sparkles, shadow: "shadow-emerald-500/20" },
 };
 
 const renderFilterText = (filter: any, n: number) => {
   if (!filter) return "carta(s)";
+  if (filter.name === "esta carta") return "esta carta";
+  
   let targetStr = "carta";
-  if (filter.targetType === "MONSTER") targetStr = "monstruo";
-  if (filter.targetType === "SPELL") targetStr = "carta de Hechizo";
+  if (filter.targetType === "MONSTER" || filter.type === "monstruo") targetStr = "monstruo";
+  if (filter.targetType === "SPELL" || filter.type === "hechizo") targetStr = "carta de Hechizo";
 
   const details = [];
   if (filter.cardName) details.push(`"${filter.cardName}"`);
+  if (filter.name && filter.name !== "esta carta") details.push(filter.name);
   if (filter.attribute && filter.attribute !== "ANY") details.push(`de atributo ${ATTR_MAP[filter.attribute] || filter.attribute}`);
   if (filter.minAtk) details.push(`con ${filter.minAtk}+ ATK`);
   if (filter.maxAtk) details.push(`con ${filter.maxAtk}- ATK`);
   if (filter.minLevel) details.push(`de Nivel ${filter.minLevel}+`);
   if (filter.maxLevel) details.push(`de Nivel ${filter.maxLevel}-`);
 
-  return `${targetStr}${n > 1 ? "s" : ""} ${details.join(" ")}`.trim();
+  return `${targetStr}${n > 1 && targetStr !== 'esta carta' ? "s" : ""} ${details.join(" ")}`.trim();
 };
 
 export const renderTriggerText = (trigger: any) => {
@@ -126,14 +130,15 @@ export const renderRestrictionText = (restr: any) => {
 export const renderCostText = (cost: any) => {
   const n = cost.params.n || 1;
   const filterText = renderFilterText(cost.params.filter, n);
+  const qtyStr = filterText === "esta carta" ? "" : `${n} `;
   switch (cost.action) {
-    case "DISCARD": return `Descarta ${n} ${filterText}`;
-    case "DESTROY_OWN": return `Destruye ${n} ${filterText} que controles`;
+    case "DISCARD": return `Descarta ${qtyStr}${filterText}`.trim();
+    case "DESTROY_OWN": return `Destruye ${qtyStr}${filterText} que controles`.trim();
     case "PAY_LP": return `Paga ${n} LP`;
-    case "BANISH_OWN": return `Destierra ${n} ${filterText} de tu posesión`;
-    case "SEND_TO_GY": return `Envía ${n} ${filterText} al Cementerio`;
-    case "TRIBUTE": return `Sacrifica ${n} ${filterText}`;
-    case "REVEAL_HAND": return `Revela ${n} ${filterText} en tu mano`;
+    case "BANISH_OWN": return `Destierra ${qtyStr}${filterText} de tu posesión`.trim();
+    case "SEND_TO_GY": return `Envía ${qtyStr}${filterText} al Cementerio`.trim();
+    case "TRIBUTE": return `Sacrifica ${qtyStr}${filterText}`.trim();
+    case "REVEAL_HAND": return `Revela ${qtyStr}${filterText} en tu mano`.trim();
     default: return `${cost.action}(${n})`;
   }
 };
@@ -143,12 +148,13 @@ export const renderResolutionText = (res: any) => {
   const filterText = renderFilterText(res.params.filter, n);
   switch (res.action) {
     case "DRAW": return `Roba ${n} carta(s)`;
-    case "DESTROY_ENEMY": return `Destuye ${n} ${filterText} del oponente`;
+    case "DESTROY_ENEMY": return `Destruye ${n} ${filterText} del oponente`;
     case "ADD_TO_HAND": return `Añade ${n} ${filterText} del Deck a tu mano`;
     case "DEAL_DAMAGE": return `Inflige ${n} puntos de daño al oponente`;
     case "HEAL_LP": return `Recupera ${n} LP`;
     case "SUMMON_FROM_DECK": return `Invoca ${n} ${filterText} desde el Deck`;
     case "BANISH_ENEMY": return `Destierra ${n} ${filterText} del oponente`;
+    case "NEGATE_EFFECT": return `Niega los efectos de ${n} ${filterText}`;
     default: return `${res.action}(${n})`;
   }
 };
@@ -183,7 +189,7 @@ export const Card: React.FC<CardProps> = ({
   const textRef = React.useRef<HTMLDivElement>(null);
 
   const isMonster = card.type === CardType.MONSTER;
-  const attrStyle = ATTRIBUTE_STYLES[card.attribute || "DARK"];
+  const attrStyle = ATTRIBUTE_STYLES[card.attribute || "NONE"] || ATTRIBUTE_STYLES["NONE"];
 
   // Single stable observer — measures real card width, zero loops.
   React.useLayoutEffect(() => {
@@ -205,10 +211,10 @@ export const Card: React.FC<CardProps> = ({
     // Optimized ratios for grid-based layout
     name: isUltraMiniature ? fw * 0.16 : (isMiniature ? fw * 0.13 : Math.min(fw * 0.088, 22)),
     attr: isUltraMiniature ? 0 : (isMiniature ? fw * 0.07 : fw * 0.05),
-    label: fw * 0.036,
+    label: fw * 0.040,
     text: fw * 0.042,
     desc: fw * 0.030,
-    footer: isMiniature ? fw * 0.10 : fw * 0.07,
+    footer: isMiniature ? fw * 0.13 : fw * 0.07,
   };
 
   // SPAGHETTI-SQUEEZE: Horizontal scaling for long names (Zero Wrap)
@@ -317,26 +323,35 @@ export const Card: React.FC<CardProps> = ({
             ref={contentRef} 
             className="absolute inset-0 flex flex-col justify-center p-[6%] gap-[3%] min-w-0"
           >
-            <div className="text-slate-300 leading-tight" style={{ fontSize: `${fsLocal.text}px` }}>
-              <span className="text-indigo-400 font-bold uppercase tracking-tighter" style={{ fontSize: `${fsLocal.label}px` }}>Act: </span>
-              {renderTriggerText(eff.trigger)}
+            <div className="text-slate-300 leading-tight mb-1" style={{ fontSize: `${fsLocal.text * 0.9}px` }}>
+              {eff.isMandatory ? (
+                <span className="text-red-400 font-black mr-1 drop-shadow-md">[Obligatorio]</span>
+              ) : (
+                <span className="text-blue-400 font-black mr-1 drop-shadow-md">[Opcional]</span>
+              )}
+              {eff.restriction?.hardOncePerTurn && (
+                <span className="text-fuchsia-400 font-black mr-1 drop-shadow-md">[Único por Nombre]</span>
+              )}
+              <span className="text-yellow-400 font-bold drop-shadow-md">[Velocidad {eff.speed || 1}]</span>
             </div>
-            <div className="text-slate-300 leading-tight" style={{ fontSize: `${fsLocal.text}px` }}>
-              <span className="text-amber-500 font-bold uppercase tracking-tighter" style={{ fontSize: `${fsLocal.label}px` }}>Cnd: </span>
-              {renderRestrictionText(eff.restriction)}
-            </div>
-            {eff.costs.length > 0 && (
-              <div className="text-red-400/90 leading-tight" style={{ fontSize: `${fsLocal.text}px` }}>
-                <span className="text-red-500/80 font-bold uppercase tracking-tighter" style={{ fontSize: `${fsLocal.label}px` }}>Cst: </span>
-                {eff.costs.map((c: any) => renderCostText(c)).join(', ')}
+            
+            {/* Causa */}
+            {eff.causaText && (
+              <div className="text-slate-300 leading-tight mb-1" style={{ fontSize: `${fsLocal.text}px` }}>
+                <span className="text-indigo-400 font-bold uppercase tracking-tighter drop-shadow-sm" style={{ fontSize: `${fsLocal.label}px` }}>Causa: </span>
+                <span dangerouslySetInnerHTML={{ __html: eff.causaText }} />
               </div>
             )}
-            {eff.resolutions.length > 0 && (
-              <div className="text-emerald-400 leading-tight" style={{ fontSize: `${fsLocal.text}px` }}>
-                <span className="text-emerald-500 font-bold uppercase tracking-tighter" style={{ fontSize: `${fsLocal.label}px` }}>Res: </span>
-                {eff.resolutions.map((r: any) => renderResolutionText(r)).join(', ')}
-              </div>
-            )}
+            
+            {/* Efecto */}
+            <div className="text-slate-300 leading-tight" style={{ fontSize: `${fsLocal.text}px` }}>
+              <span className="text-emerald-500 font-bold uppercase tracking-tighter drop-shadow-sm" style={{ fontSize: `${fsLocal.label}px` }}>Efecto: </span>
+              {eff.efectoText ? (
+                <span className="text-slate-200" dangerouslySetInnerHTML={{ __html: eff.efectoText }} />
+              ) : (
+                <span className="text-slate-500 italic">Ninguno</span>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -486,13 +501,14 @@ export const Card: React.FC<CardProps> = ({
 
       {/* Footer: ATK / DEF / status — Grid for absolute centering */}
       {!isUltraMiniature && (
-        <div className="border-t border-slate-800/50 mt-auto pt-1 shrink-0 px-[4%]">
+        <div className={`border-t border-slate-800/50 mt-auto shrink-0 px-[4%] bg-slate-950/80
+          ${isMiniature ? 'pt-[4%] pb-[12%]' : 'pt-[2%] pb-[1%]'}`}>
           <div className="grid grid-cols-[1fr_10px_1fr] items-center w-full font-mono text-slate-300">
-            <div className="flex items-center gap-1 overflow-hidden">
+            <div className="flex items-center gap-1">
               {isMonster && (
-                <div ref={atkRef} className="flex items-center gap-1 whitespace-nowrap origin-left">
-                  <span className="text-slate-500 font-bold uppercase" style={{ fontSize: `calc(${fs.label} * 0.7)` }}>Atk</span>
-                  <span className="text-white font-black tracking-widest" style={{ fontSize: `${fs.footer}px` }}>{card.atk ?? 0}</span>
+                <div ref={atkRef} className="flex items-center gap-1.5 whitespace-nowrap origin-left">
+                  <span className="text-slate-500 font-bold uppercase" style={{ fontSize: `calc(${fs.label} * 0.8)` }}>Atk</span>
+                  <span className="text-white font-black tracking-widest drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]" style={{ fontSize: `${fs.footer}px`, lineHeight: 1.2 }}>{card.atk ?? 0}</span>
                 </div>
               )}
             </div>
@@ -501,11 +517,11 @@ export const Card: React.FC<CardProps> = ({
               {/* Central space remains open for balance */}
             </div>
 
-            <div className="flex items-center justify-end overflow-hidden">
+            <div className="flex items-center justify-end">
               {isMonster && (
-                <div ref={defRef} className="flex items-center gap-1 whitespace-nowrap origin-right">
-                  <span className="text-slate-500 font-bold uppercase" style={{ fontSize: `calc(${fs.label} * 0.7)` }}>Def</span>
-                  <span className="text-white font-black tracking-widest" style={{ fontSize: `${fs.footer}px` }}>{card.def ?? 0}</span>
+                <div ref={defRef} className="flex items-center gap-1.5 whitespace-nowrap origin-right">
+                  <span className="text-slate-500 font-bold uppercase" style={{ fontSize: `calc(${fs.label} * 0.8)` }}>Def</span>
+                  <span className="text-white font-black tracking-widest drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]" style={{ fontSize: `${fs.footer}px`, lineHeight: 1.2 }}>{card.def ?? 0}</span>
                 </div>
               )}
             </div>

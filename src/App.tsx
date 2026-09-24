@@ -22,7 +22,8 @@ import {
   FrequencyType, 
   CardLocation,
   CardDefinition,
-  DeckDefinition
+  DeckDefinition,
+  PhysicalCard
 } from './types';
 import { ConfirmModal } from './components/ConfirmModal';
 import { Home } from './components/Home';
@@ -31,11 +32,14 @@ import { DuelLobby } from './components/DuelLobby';
 import { DuelRoom } from './components/DuelRoom';
 import { RPSPhase } from './components/RPSPhase';
 import { DuelBoard } from './components/DuelBoard';
+import { Shop } from './components/Shop';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { API_BASE } from './config';
 
 interface UserData {
   name: string;
   email: string;
+  coins: number;
 }
 
 // Initial Mock Data
@@ -48,16 +52,19 @@ const INITIAL_COLLECTION: CardDefinition[] = [
     atk: 1800,
     def: 1200,
     attribute: CardAttribute.LIGHT,
-    description: 'When summoned, draw 2 cards by paying 500 LP.',
+    description: 'When summoned, draw 1 card by paying 500 LP.',
     isCustom: false,
+    isPublic: true,
     effects: [
       {
         id: 'eff_01',
         name: 'Visionary Reach',
         restriction: { locations: [CardLocation.MONSTER_ZONE], frequency: FrequencyType.ONCE_PER_TURN },
         trigger: { type: TriggerType.ON_SUMMON },
+        speed: 1,
+        isMandatory: false,
         costs: [{ action: 'PAY_LP', params: { n: 500 } }],
-        resolutions: [{ action: 'DRAW', params: { n: 2 } }]
+        resolutions: [{ action: 'DRAW', params: { n: 1 } }]
       }
     ]
   },
@@ -71,12 +78,15 @@ const INITIAL_COLLECTION: CardDefinition[] = [
     attribute: CardAttribute.DARK,
     description: 'Any time: Discard 1 to banish 1 card from opponent GY.',
     isCustom: false,
+    isPublic: true,
     effects: [
       {
         id: 'eff_02',
         name: 'Shadow Banish',
-        restriction: { locations: [], frequency: FrequencyType.UNLIMITED },
+        restriction: { locations: [CardLocation.MONSTER_ZONE], frequency: FrequencyType.UNLIMITED },
         trigger: { type: TriggerType.ANY_TIME },
+        speed: 2,
+        isMandatory: false,
         costs: [],
         resolutions: [],
         execute: async (ctx) => {
@@ -115,18 +125,70 @@ const INITIAL_COLLECTION: CardDefinition[] = [
     id: 'base_03',
     name: 'Pot of Greed',
     type: CardType.SPELL,
-    description: 'Any time: Heal 1000 LP and draw 2 cards.',
+    description: 'Any time: Heal 500 LP and draw 1 card.',
+    attribute: CardAttribute.NONE,
     isCustom: false,
+    isPublic: true,
     effects: [
       {
         id: 'eff_03',
         name: 'Greedy Heal',
-        restriction: { locations: [], frequency: FrequencyType.UNLIMITED },
+        restriction: { locations: [CardLocation.HAND, CardLocation.SPELL_ZONE], frequency: FrequencyType.UNLIMITED },
         trigger: { type: TriggerType.ANY_TIME },
+        speed: 1,
+        isMandatory: false,
+        costs: [],
+        resolutions: [
+          { action: 'RECOVER_LP', params: { amount: 500 } },
+          { action: 'DRAW', params: { n: 1 } }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'base_04',
+    name: 'Thunder Knight',
+    type: CardType.MONSTER,
+    level: 4,
+    atk: 1600,
+    def: 1200,
+    attribute: CardAttribute.LIGHT,
+    description: 'When summoned (Mandatory): Draw 1 card.',
+    isCustom: false,
+    isPublic: true,
+    effects: [
+      {
+        id: 'eff_04',
+        name: 'Thunder Draw',
+        restriction: { locations: [CardLocation.MONSTER_ZONE], frequency: FrequencyType.UNLIMITED },
+        trigger: { type: TriggerType.ON_SUMMON },
+        speed: 1,
+        isMandatory: true,
+        costs: [],
+        resolutions: [{ action: 'DRAW', params: { n: 1 } }]
+      }
+    ]
+  },
+  {
+    id: 'base_05',
+    name: 'Quick Shield',
+    type: CardType.SPELL,
+    description: 'Quick Effect: Gain 1000 LP and draw 1 card.',
+    attribute: CardAttribute.NONE,
+    isCustom: false,
+    isPublic: true,
+    effects: [
+      {
+        id: 'eff_05',
+        name: 'Emergency Guard',
+        restriction: { locations: [CardLocation.HAND, CardLocation.SPELL_ZONE], frequency: FrequencyType.UNLIMITED },
+        trigger: { type: TriggerType.ANY_TIME },
+        speed: 2,
+        isMandatory: false,
         costs: [],
         resolutions: [
           { action: 'RECOVER_LP', params: { amount: 1000 } },
-          { action: 'DRAW', params: { n: 2 } }
+          { action: 'DRAW', params: { n: 1 } }
         ]
       }
     ]
@@ -141,6 +203,7 @@ export default function App() {
   const [user, setUser] = useState<UserData | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [collection, setCollection] = useState<CardDefinition[]>(INITIAL_COLLECTION);
+  const [physicalCards, setPhysicalCards] = useState<PhysicalCard[]>([]);
   const [decks, setDecks] = useState<DeckDefinition[]>([]);
   const [activeDeck, setActiveDeck] = useState<DeckDefinition>({
     id: 'deck_default',
@@ -191,7 +254,7 @@ export default function App() {
       };
       checkActiveRoom();
     }
-  }, [user]);
+  }, [user?.email]);
 
   // Presence Heartbeat
   useEffect(() => {
@@ -207,7 +270,7 @@ export default function App() {
       }, 30000); // 30s heartbeats
       return () => clearInterval(interval);
     }
-  }, [user]);
+  }, [user?.email]);
 
   // Fetch initial data
   React.useEffect(() => {
@@ -219,6 +282,12 @@ export default function App() {
       .then(data => setCollection(data))
       .catch(err => console.error("Failed to load collection:", err));
 
+    // Fetch Physical Cards
+    fetch(`${API_BASE}/physical-cards?userEmail=${user.email}`)
+      .then(res => res.json())
+      .then(data => setPhysicalCards(data))
+      .catch(err => console.error("Failed to load physical cards:", err));
+
     // Fetch Decks
     fetch(`${API_BASE}/decks?userEmail=${user.email}`)
       .then(res => res.json())
@@ -227,7 +296,33 @@ export default function App() {
         if (data.length > 0) setActiveDeck(data[0]);
       })
       .catch(err => console.error("Failed to load decks:", err));
-  }, [user]);
+  }, [user?.email]);
+
+  // Poll user profile for coins update
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/users/${user.email}`);
+        if (res.ok) {
+          const userData = await res.json();
+          setUser(prev => prev ? { ...prev, coins: userData.coins } : prev);
+        }
+      } catch (e) {}
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [user?.email]);
+
+  const refreshPhysicalCards = async () => {
+    if (!user) return;
+    try {
+      const res = await fetch(`${API_BASE}/physical-cards?userEmail=${user.email}`);
+      const data = await res.json();
+      setPhysicalCards(data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const handleSaveCard = async (card: CardDefinition) => {
     if (!user) return;
@@ -384,13 +479,13 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-indigo-500/30">
+    <div className="h-screen overflow-hidden bg-slate-950 text-slate-100 font-sans selection:bg-indigo-500/30 flex flex-col">
       {/* Sidebar Navigation Removed - Replaced by Back Button in Header */}
 
       {/* Main Content Area */}
-      <main className="min-h-screen transition-all duration-500">
+      <main className="flex-1 flex flex-col transition-all duration-500 overflow-hidden">
         {activeModule !== 'HOME' && activeModule !== 'DUEL_BOARD' && (
-          <header className="px-4 md:px-8 py-6 border-b border-slate-900 flex justify-between items-center bg-slate-950/50 backdrop-blur-xl sticky top-0 z-40">
+          <header className="px-4 md:px-8 py-4 border-b border-slate-900 flex justify-between items-center bg-slate-950/50 backdrop-blur-xl shrink-0 z-40">
             <div className="flex items-center gap-4">
               <button 
                 onClick={() => setActiveModule('HOME')}
@@ -415,6 +510,12 @@ export default function App() {
             </div>
             
             <div className="flex items-center gap-4">
+               <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-500/10 border border-amber-500/20 rounded-full text-amber-500 font-black tracking-widest text-sm shadow-inner shadow-amber-900/20">
+                 <div className="w-4 h-4 rounded-full bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.5)] flex items-center justify-center text-[10px] text-amber-950">
+                   $
+                 </div>
+                 {(user.coins || 0).toLocaleString()}
+               </div>
                <div className="px-3 py-1 bg-slate-900 border border-slate-800 rounded-full text-xs font-mono text-slate-400">
                  {activeModule === 'DUEL_BOARD' ? `Duel: ${currentRoomId}` : `Collection: ${collection.length} Cards`}
                </div>
@@ -422,28 +523,45 @@ export default function App() {
           </header>
         )}
 
-        <section className={`${activeModule === 'HOME' ? 'p-0 max-w-none' : 'p-8 max-w-[1400px]'} mx-auto`}>
+        <section className={`flex-1 flex flex-col ${activeModule === 'HOME' ? 'p-0 max-w-none overflow-y-auto' : activeModule === 'DECK' ? 'p-4 max-w-[1800px] w-full mx-auto overflow-hidden' : 'p-8 max-w-[1400px] w-full mx-auto overflow-y-auto'}`}>
           {activeModule === 'HOME' && (
             <Home 
               onNavigate={setActiveModule}
               cardCount={collection.length}
               deckCount={decks.length}
               userName={user.name}
+              coins={user.coins || 0}
               onLogout={() => setUser(null)}
               onNavigateDuel={() => setActiveModule('DUEL_LOBBY')}
             />
           )}
           {activeModule === 'DECK' && (
-            <DeckBuilder 
-              collection={collection} 
-              decks={decks}
-              currentDeck={activeDeck} 
-              onUpdateDeck={setActiveDeck}
-              onSaveDeck={handleSaveDeck}
-              onDeleteDeck={handleDeleteDeck}
-              onCreateDeck={handleCreateDeck}
-              onSelectDeck={handleSelectDeck}
-              hasUnsavedChanges={isDeckDirty(activeDeck)}
+            <ErrorBoundary>
+              <DeckBuilder 
+                collection={collection} 
+                physicalCards={physicalCards}
+                decks={decks}
+                currentDeck={activeDeck} 
+                onUpdateDeck={setActiveDeck}
+                onSaveDeck={handleSaveDeck}
+                onDeleteDeck={handleDeleteDeck}
+                onCreateDeck={handleCreateDeck}
+                onSelectDeck={handleSelectDeck}
+                hasUnsavedChanges={isDeckDirty(activeDeck)}
+                onRefreshPhysicalCards={refreshPhysicalCards}
+                userCoins={user?.coins ?? 0}
+                userEmail={user?.email ?? ''}
+              />
+            </ErrorBoundary>
+          )}
+          {activeModule === 'SHOP' && (
+            <Shop
+              userEmail={user.email}
+              coins={user.coins || 0}
+              collection={collection}
+              onBack={() => setActiveModule('HOME')}
+              onRefreshPhysicalCards={refreshPhysicalCards}
+              onUpdateCoins={(coins) => setUser(prev => prev ? { ...prev, coins } : prev)}
             />
           )}
           {(activeModule === 'TEST' || activeModule === 'DUEL_BOARD') && currentRoomId && (
@@ -469,6 +587,7 @@ export default function App() {
               roomId={currentRoomId}
               userEmail={user.email}
               userDecks={decks}
+              physicalCards={physicalCards}
               isSpectator={isSpectator}
               onRoleChanged={(isSpec) => setIsSpectator(isSpec)}
               onStartDuel={() => setActiveModule('DUEL_RPS')}

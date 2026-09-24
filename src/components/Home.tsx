@@ -8,19 +8,24 @@ import {
   Settings,
   User,
   Star,
-  ChevronRight
+  ChevronRight,
+  BookOpen
 } from 'lucide-react';
+import { RulebookModal } from './RulebookModal';
 
 interface HomeProps {
   onNavigate: (module: 'DECK' | 'TEST' | 'SHOP') => void;
   cardCount: number;
   deckCount: number;
   userName: string;
+  coins: number;
   onLogout: () => void;
   onNavigateDuel: () => void;
 }
 
-export function Home({ onNavigate, cardCount, deckCount, userName, onLogout, onNavigateDuel }: HomeProps) {
+export function Home({ onNavigate, cardCount, deckCount, userName, coins, onLogout, onNavigateDuel }: HomeProps) {
+  const [isRulebookOpen, setIsRulebookOpen] = React.useState(false);
+
   return (
     <div className="relative min-h-screen w-full overflow-hidden bg-slate-950 font-sans text-slate-100 selection:bg-indigo-500/30">
       {/* Background Decorative Elements */}
@@ -80,6 +85,8 @@ export function Home({ onNavigate, cardCount, deckCount, userName, onLogout, onN
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Level 24</span>
               <span className="text-slate-700 text-[10px]">•</span>
+              <span className="text-[10px] text-amber-500 font-bold uppercase tracking-wider">${coins.toLocaleString()} Coins</span>
+              <span className="text-slate-700 text-[10px]">•</span>
               <button
                 onClick={(e) => { e.stopPropagation(); onLogout(); }}
                 className="text-[10px] text-red-500/60 hover:text-red-400 font-black uppercase tracking-widest transition-colors"
@@ -128,13 +135,22 @@ export function Home({ onNavigate, cardCount, deckCount, userName, onLogout, onN
             color="gold"
             delay={0.4}
             onClick={() => onNavigate('SHOP')}
-            stats="Coming Soon"
+            stats="Buy Packs"
           />
         </div>
       </main>
 
       {/* Settings & Bottom Controls */}
-      <footer className="absolute bottom-0 left-0 right-0 z-10 p-8 md:p-12 flex justify-end">
+      <footer className="absolute bottom-0 left-0 right-0 z-10 p-8 md:p-12 flex justify-between items-center">
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={() => setIsRulebookOpen(true)}
+          className="px-6 py-3 bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/30 rounded-2xl text-indigo-300 hover:text-indigo-100 font-black uppercase tracking-widest flex items-center gap-3 transition-colors shadow-[0_0_15px_rgba(99,102,241,0.2)]"
+        >
+          <BookOpen className="w-5 h-5" />
+          Libro de Reglas
+        </motion.button>
         <motion.button
           whileHover={{ rotate: 90, scale: 1.1 }}
           whileTap={{ scale: 0.9 }}
@@ -143,6 +159,7 @@ export function Home({ onNavigate, cardCount, deckCount, userName, onLogout, onN
           <Settings className="w-8 h-8" />
         </motion.button>
       </footer>
+      <RulebookModal isOpen={isRulebookOpen} onClose={() => setIsRulebookOpen(false)} />
     </div>
   );
 }

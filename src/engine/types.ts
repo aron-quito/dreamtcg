@@ -24,6 +24,15 @@ export interface SyncedGameState extends GameState {
   winnerEmail?: string | null;
   waitingForResponse?: boolean;
   responderEmail?: string | null; // Who gets priority to respond
+  queuedTriggers?: {
+    instanceId: string;
+    effectId: string;
+    controllerIndex: 0 | 1;
+    isMandatory: boolean;
+    originZone: string;
+  }[];
+  segocPhase?: "TP_OPTIONAL" | "OPP_OPTIONAL" | null;
+  salvationHandled?: boolean;
 }
 
 // ─── Chain Link ───────────────────────────────────────────────────────────────

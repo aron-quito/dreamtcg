@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 
 interface AuthProps {
-  onLogin: (user: { name: string; email: string }) => void;
+  onLogin: (user: { name: string; email: string, coins?: number }) => void;
 }
 
 export function Auth({ onLogin }: AuthProps) {
@@ -59,7 +59,8 @@ export function Auth({ onLogin }: AuthProps) {
     setTimeout(() => {
       onLogin({ 
         name: 'Google Duelist',
-        email: 'google@example.com' 
+        email: 'google@example.com',
+        coins: 0
       });
       setIsLoading(false);
     }, 1000);

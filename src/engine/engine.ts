@@ -238,9 +238,11 @@ export class EffectEngine {
             const isMatch = (effect.trigger.type === triggerType);
             
             if (!isMatch) continue;
+            
+            const isSource = (instanceId === triggerParams.instanceId);
+            if (effect.trigger.params?.selfOnly && !isSource) continue;
 
             // Location check
-            const isSource = (instanceId === triggerParams.instanceId);
             const currentLoc = isInAllowedLocation(game, instanceId, effect.restriction.locations);
             if (!currentLoc) {
                if (isSource && originZone === 'hand' && effect.restriction.locations.includes(CardLocation.HAND)) {
@@ -270,24 +272,31 @@ export class EffectEngine {
         }
       }
 
-      // 3. Build Pending Chain and Pass Priority
-      game.pendingChain = game.pendingChain || [];
+      // 3. Queue Triggers for SEGOC
+      game.queuedTriggers = game.queuedTriggers || [];
       for (const link of candidateLinks) {
-        game.pendingChain.push({
+        let originZone = "unknown";
+        for (const p of game.players) {
+            if (p.hand.includes(link.instanceId)) originZone = "hand";
+            else if (p.monsterZones.includes(link.instanceId)) originZone = "monsterZones";
+            else if (p.spellZones.includes(link.instanceId)) originZone = "spellZones";
+            else if (p.gy.includes(link.instanceId)) originZone = "gy";
+            else if (p.removed.includes(link.instanceId)) originZone = "removed";
+            else if (p.deck.includes(link.instanceId)) originZone = "deck";
+        }
+        game.queuedTriggers.push({
           instanceId: link.instanceId,
           effectId: link.effect.id,
-          controllerIndex: link.controllerIndex
+          controllerIndex: link.controllerIndex,
+          isMandatory: !!link.effect.isMandatory,
+          originZone
         });
       }
 
-      // As requested by the user: Whenever a player takes an action (Summon, Activate, etc),
-      // the opponent ALWAYS gets the first chance to respond (priority).
-      const priorityPlayer = 1 - (triggerParams.controllerIndex ?? game.activePlayerIndex);
-
-      game.chainPriority = {
-        playerIndex: priorityPlayer,
-        passCount: 0
-      };
+      // If we are NOT currently building or resolving a chain, process the queue immediately
+      if (!game.chainPriority && (!game.pendingChain || game.pendingChain.length === 0)) {
+         game = this.processSegocQueue(game);
+      }
 
       return game;
 
@@ -296,6 +305,101 @@ export class EffectEngine {
       console.error("Engine Crash:", err);
       return currentGame;
     }
+  }
+
+  // ─── SEGOC Processing ────────────────────────────────────────────────────
+  
+  public processSegocQueue(currentGame: SyncedGameState): SyncedGameState {
+    let game = JSON.parse(JSON.stringify(currentGame)) as SyncedGameState;
+    if (!game.queuedTriggers || game.queuedTriggers.length === 0) {
+      game.segocPhase = null;
+      
+      // If there is a pending direct attack, prompt for Salvation BEFORE Quick Effects
+      if (game.pendingAttack?.targetId === 'DIRECT' && !game.directAttackPrompt && !game.salvationHandled) {
+         game.directAttackPrompt = game.pendingAttack.attackerId;
+         // Do not start chainPriority yet. UI will handle salvation prompt and transition to chainPriority if needed.
+         return game;
+      }
+      
+      // Triggers handled, pass normal priority to start Quick Effects (Speed 2+)
+      // If we already have a pending chain, whoever didn't add the last link gets priority
+      const lastController = game.pendingChain && game.pendingChain.length > 0 
+        ? game.pendingChain[game.pendingChain.length - 1].controllerIndex 
+        : game.activePlayerIndex;
+      const nextPriorityPlayer = 1 - lastController;
+      
+      game.chainPriority = {
+        playerIndex: nextPriorityPlayer,
+        passCount: 0
+      };
+      return game;
+    }
+
+    game.pendingChain = game.pendingChain || [];
+
+    // Filter out triggers where the card left its origin zone
+    game.queuedTriggers = game.queuedTriggers.filter(t => {
+      let currentZone = "unknown";
+      for (const p of game.players) {
+          if (p.hand.includes(t.instanceId)) currentZone = "hand";
+          else if (p.monsterZones.includes(t.instanceId)) currentZone = "monsterZones";
+          else if (p.spellZones.includes(t.instanceId)) currentZone = "spellZones";
+          else if (p.gy.includes(t.instanceId)) currentZone = "gy";
+          else if (p.removed.includes(t.instanceId)) currentZone = "removed";
+          else if (p.deck.includes(t.instanceId)) currentZone = "deck";
+      }
+      return currentZone === t.originZone;
+    });
+
+    if (game.queuedTriggers.length === 0) {
+      return this.processSegocQueue(game);
+    }
+
+    // 1. Turn Player Mandatory
+    const tpMandatory = game.queuedTriggers.findIndex(t => t.isMandatory && t.controllerIndex === game.activePlayerIndex);
+    if (tpMandatory !== -1) {
+      const t = game.queuedTriggers.splice(tpMandatory, 1)[0];
+      game.pendingChain.push({ instanceId: t.instanceId, effectId: t.effectId, controllerIndex: t.controllerIndex });
+      return this.processSegocQueue(game);
+    }
+
+    // 2. Opponent Mandatory
+    const oppMandatory = game.queuedTriggers.findIndex(t => t.isMandatory && t.controllerIndex !== game.activePlayerIndex);
+    if (oppMandatory !== -1) {
+      const t = game.queuedTriggers.splice(oppMandatory, 1)[0];
+      game.pendingChain.push({ instanceId: t.instanceId, effectId: t.effectId, controllerIndex: t.controllerIndex });
+      return this.processSegocQueue(game);
+    }
+
+    // 3. Turn Player Optional
+    const tpOptional = game.queuedTriggers.filter(t => !t.isMandatory && t.controllerIndex === game.activePlayerIndex);
+    if (tpOptional.length > 0) {
+      game.segocPhase = "TP_OPTIONAL";
+      return game;
+    }
+
+    // 4. Opponent Optional
+    const oppOptional = game.queuedTriggers.filter(t => !t.isMandatory && t.controllerIndex !== game.activePlayerIndex);
+    if (oppOptional.length > 0) {
+      game.segocPhase = "OPP_OPTIONAL";
+      return game;
+    }
+
+    return game;
+  }
+
+  public selectSegocTrigger(currentGame: SyncedGameState, instanceId: string, effectId: string): SyncedGameState {
+    let game = JSON.parse(JSON.stringify(currentGame)) as SyncedGameState;
+    if (!game.queuedTriggers || !game.segocPhase) return game;
+
+    const idx = game.queuedTriggers.findIndex(t => t.instanceId === instanceId && t.effectId === effectId);
+    if (idx !== -1) {
+      const t = game.queuedTriggers.splice(idx, 1)[0];
+      game.pendingChain = game.pendingChain || [];
+      game.pendingChain.push({ instanceId: t.instanceId, effectId: t.effectId, controllerIndex: t.controllerIndex });
+    }
+
+    return this.processSegocQueue(game);
   }
 
   // ─── Public: Manually add a card effect to the current chain ───────────
@@ -348,9 +452,23 @@ export class EffectEngine {
     
     let game = this.addToChain(instanceId, effectId, currentGame);
     
+    // Find effect speed
+    const cardId = instanceId.substring(0, instanceId.lastIndexOf("_"));
+    const cardDef = this.cardDefs.get(cardId);
+    let speed: 1 | 2 | 3 = 1;
+    if (cardDef) {
+       const eff = (cardDef.effects || []).find(e => e.id === effectId);
+       if (eff && eff.speed) speed = eff.speed;
+    }
+    
+    // Ensure priority level doesn't go backwards
+    const currentPriority = game.chainPriority?.priorityLevel || 1;
+    const newPriority = Math.max(currentPriority, speed) as 1 | 2 | 3;
+
     game.chainPriority = {
       playerIndex: 1 - controllerIndex,
-      passCount: 0
+      passCount: 0,
+      priorityLevel: newPriority
     };
     
     return game;
@@ -370,7 +488,6 @@ export class EffectEngine {
     if (game.chainPriority.passCount >= 2) {
       // Both passed, start step-by-step resolution
       if (!game.pendingChain || game.pendingChain.length === 0) {
-        // Empty chain, just clear priority
         game.chainPriority = undefined;
         return game;
       }
@@ -469,12 +586,12 @@ export class EffectEngine {
     if (game.pendingChain.length > 0) {
       // Set playerIndex to the controller of the NEW last link
       game.chainPriority!.playerIndex = game.pendingChain[game.pendingChain.length - 1].controllerIndex;
+      return game;
     } else {
       game.chainPriority = undefined;
       log("--- Chain Closed ---", "chain");
+      return this.processSegocQueue(game);
     }
-
-    return game;
   }
 
   /**

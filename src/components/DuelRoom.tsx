@@ -37,13 +37,14 @@ interface DuelRoomProps {
   roomId: string;
   userEmail: string;
   userDecks: DeckDefinition[];
+  physicalCards: import('../types').PhysicalCard[];
   isSpectator?: boolean;
   onRoleChanged: (isSpec: boolean) => void;
   onStartDuel: (config: { hostDeckId: string; guestDeckId: string; hostEmail: string; guestEmail: string }) => void;
   onExit: () => void;
 }
 
-export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChanged, onStartDuel, onExit }: DuelRoomProps) {
+export function DuelRoom({ roomId, userEmail, userDecks, physicalCards, isSpectator, onRoleChanged, onStartDuel, onExit }: DuelRoomProps) {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [selectedDeckId, setSelectedDeckId] = useState<string>('');
   const [isReady, setIsReady] = useState(false);
@@ -162,10 +163,26 @@ export function DuelRoom({ roomId, userEmail, userDecks, isSpectator, onRoleChan
     onExit();
   };
 
+  const checkDeckLegality = (deckId: string) => {
+    const deck = userDecks.find(d => d.id === deckId);
+    if (!deck) return false;
+    if (deck.mainCards.length === 0 || deck.mainCards.length > 60) return false;
+    for (const cardId of deck.mainCards) {
+      const pc = physicalCards.find(p => p.id === cardId);
+      if (!pc) return false;
+      if (pc.durability <= 0) return false;
+    }
+    return true;
+  };
+
   const handleToggleReady = () => {
     if (isSpectator) return;
     if (!selectedDeckId) {
       alert("Please select a deck first!");
+      return;
+    }
+    if (!isReady && !checkDeckLegality(selectedDeckId)) {
+      alert("This deck is illegal! It contains proxy cards (cards you don't own) or broken cards. Please repair your cards or swap them for physical copies in the Deck Builder.");
       return;
     }
     const nextReady = !isReady;

@@ -22,7 +22,8 @@ import {
   Flame,
   Package,
   Star,
-  CloudRain
+  CloudRain,
+  Eye
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -144,6 +145,8 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
   // --- CHAIN ANIMATION STATES ---
   const [selectedPriorityItem, setSelectedPriorityItem] = useState<{ instanceId: string; effectId: string } | null>(null);
   const [isPriorityMinimized, setIsPriorityMinimized] = useState(false);
+  const [isDirectAttackPromptMinimized, setIsDirectAttackPromptMinimized] = useState(false);
+  const finishRequestSentRef = useRef(false);
   const [chainBuildAnim, setChainBuildAnim] = useState<{ 
     instanceId: string; 
     chainNumber: number; 
@@ -179,11 +182,28 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
   const opponent = game?.players && game.players[oppIndex] ? game.players[oppIndex] : null;
   const isMyTurn = !isSpectator && game?.activePlayerIndex === (isP1 ? 0 : 1);
 
+  const isMySegocPhase = !isSpectator && game?.segocPhase && (
+    (game.segocPhase === 'TP_OPTIONAL' && isMyTurn) ||
+    (game.segocPhase === 'OPP_OPTIONAL' && !isMyTurn)
+  );
+  const mySegocTriggers = isMySegocPhase ? (game?.queuedTriggers?.filter(t => t.controllerIndex === myIndex && !t.isMandatory) || []) : [];
+
   const getCardDefByInstance = useCallback((instanceId: string | null) => {
     if (!instanceId) return null;
     const cardId = instanceId.substring(0, instanceId.lastIndexOf('_'));
     return cards.find(c => c.id === cardId) || null;
   }, [cards]);
+
+  const getCardStats = useCallback((instanceId: string, baseAtk: number = 0, baseDef: number = 0) => {
+    if (!game) return { atk: baseAtk, def: baseDef };
+    let p = game.players[0];
+    if (!p.monsterZones.includes(instanceId) && !p.spellZones.includes(instanceId)) p = game.players[1];
+    const mod = p?.statModifiers?.[instanceId];
+    return {
+      atk: mod?.atk !== undefined ? mod.atk : baseAtk,
+      def: mod?.def !== undefined ? mod.def : baseDef
+    };
+  }, [game]);
 
   const hasAttributeMatch = useCallback((cardDef: CardDefinition | null) => {
     if (!cardDef || !me) return false;
@@ -251,6 +271,21 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                 } else if (userEmail) {
                   const isWinner = nextGame.winnerEmail.toLowerCase().trim() === userEmail.toLowerCase().trim();
                   setDuelResult(isWinner ? 'VICTORY' : 'DEFEAT');
+
+                  // If the room is not marked as finished yet, and I am the winner, I will trigger the finish endpoint
+                  // so the loser loses durability
+                  if (data.status !== 'FINISHED' && isWinner && !finishRequestSentRef.current) {
+                    finishRequestSentRef.current = true;
+                    const loserEmail = data.player1_email === nextGame.winnerEmail ? data.player2_email : data.player1_email;
+                    const loserDeckId = data.player1_email === nextGame.winnerEmail ? data.guest_deck_id : data.host_deck_id;
+                    const winnerDeckId = data.player1_email === nextGame.winnerEmail ? data.host_deck_id : data.guest_deck_id;
+                    
+                    fetch(`${API_BASE}/rooms/game/finish`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ roomId, loserEmail, loserDeckId, winnerEmail: nextGame.winnerEmail, winnerDeckId })
+                    }).catch(console.error);
+                  }
                 }
               }
             } catch (err) {
@@ -260,7 +295,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
             isInitRef.current = true;
             console.log("Host initializing game state...");
             
-            // Fetch both players' decks directly from the server
+            // Fetch both players' decks and collections directly from the server
             const fetchDecks = async (email: string) => {
                try {
                   const res = await fetch(`${API_BASE}/decks?userEmail=${email}`);
@@ -271,19 +306,43 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
             
             const p1Decks = await fetchDecks(data.player1_email);
             const p2Decks = await fetchDecks(data.player2_email);
+
+            const fetchCollection = async (email: string) => {
+               try {
+                  const res = await fetch(`${API_BASE}/physical-cards?userEmail=${email}`);
+                  if (res.ok) return await res.json();
+               } catch(e) {}
+               return [];
+            };
+
+            const p1Cards = await fetchCollection(data.player1_email);
+            const p2Cards = await fetchCollection(data.player2_email);
             
-            const filterDeck = (deckId: string | null, sourceDecks: any[]) => {
+            const filterDeck = (deckId: string | null, sourceDecks: any[], sourceCards: any[]) => {
               const deck = sourceDecks.find((d: any) => d.id === deckId);
               if (!deck) return [];
-              return deck.mainCards.map((id: string) => {
-                 const def = cards.find(c => c.id === id);
+              
+              const resolvedDeck = deck.mainCards.map((id: string) => {
+                 let templateId = id;
+                 const pc = sourceCards.find((c: any) => c.id === id);
+                 if (pc) templateId = pc.templateId;
+
+                 const def = cards.find(c => c.id === templateId);
                  return def ? `${def.id}_${Math.random().toString(36).substr(2, 9)}` : null;
               }).filter(Boolean) as string[];
+
+              // Shuffle the deck!
+              for (let i = resolvedDeck.length - 1; i > 0; i--) {
+                  const j = Math.floor(Math.random() * (i + 1));
+                  [resolvedDeck[i], resolvedDeck[j]] = [resolvedDeck[j], resolvedDeck[i]];
+              }
+              
+              return resolvedDeck;
             };
 
             // Draw initial hands (4 cards)
-            const p1Deck = filterDeck(data.host_deck_id, p1Decks);
-            const p2Deck = filterDeck(data.guest_deck_id, p2Decks);
+            const p1Deck = filterDeck(data.host_deck_id, p1Decks, p1Cards);
+            const p2Deck = filterDeck(data.guest_deck_id, p2Decks, p2Cards);
             const p1Hand = p1Deck.splice(0, 4);
             const p2Hand = p2Deck.splice(0, 4);
 
@@ -494,6 +553,8 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
             return new Promise<string[]>((resolve) => {
               setEngineSelectionPrompt({ options, count, message, resolve });
               setSelectedEngineOptions([]);
+              setInspectedInstanceId(currentLink.instanceId);
+              setIsInspectorPanelOpen(true);
             });
           }
         );
@@ -511,7 +572,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     if (!game) return;
     
     // Check if chain window is fully closed and we have a pending attack
-    if (!game.chainPriority && (!game.pendingChain || game.pendingChain.length === 0) && game.pendingAttack) {
+    if (!game.chainPriority && (!game.pendingChain || game.pendingChain.length === 0) && game.pendingAttack && !game.directAttackPrompt) {
        // Only the attacking player resumes the attack to prevent duplicate updates
        if (myIndex === game.activePlayerIndex) {
          const nextGame = JSON.parse(JSON.stringify(game)) as SyncedGameState;
@@ -524,7 +585,42 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
          }, 800);
        }
     }
-  }, [game?.chainPriority, game?.pendingChain?.length, game?.pendingAttack, myIndex, game?.activePlayerIndex]);
+  }, [game?.chainPriority, game?.pendingChain?.length, game?.pendingAttack, game?.directAttackPrompt, myIndex, game?.activePlayerIndex]);
+
+  // AUTO ATTACK FOR DREAM SUMMON
+  useEffect(() => {
+    if (!game || !isMyTurn) return;
+    const myPlayer = game.players[myIndex];
+    if (game.phase === GamePhase.DREAM && 
+        myPlayer.dreamSummonUsedThisTurn && 
+        !myPlayer.dreamSummonAttackDeclared && 
+        myPlayer.dreamSummonedInstanceId &&
+        !game.chainPriority && 
+        (!game.pendingChain || game.pendingChain.length === 0) &&
+        !game.directAttackPrompt && 
+        !game.pendingAttack) {
+      
+      const nextGame = JSON.parse(JSON.stringify(game)) as SyncedGameState;
+      nextGame.players[myIndex].dreamSummonAttackDeclared = true;
+      nextGame.directAttackPrompt = myPlayer.dreamSummonedInstanceId;
+      nextGame.pendingAttack = { attackerId: myPlayer.dreamSummonedInstanceId, targetId: 'DIRECT' };
+      pushLog(nextGame, `Dream Summon initiated automatic Direct Attack!`, 'system');
+      setGame(nextGame);
+      updateServerGame(nextGame);
+    }
+  }, [
+    game?.phase, 
+    game?.players[myIndex]?.dreamSummonUsedThisTurn, 
+    game?.players[myIndex]?.dreamSummonAttackDeclared,
+    game?.players[myIndex]?.dreamSummonedInstanceId,
+    game?.chainPriority,
+    game?.pendingChain?.length,
+    game?.directAttackPrompt,
+    game?.pendingAttack,
+    isMyTurn, 
+    myIndex
+  ]);
+
   // ACTIONS
   const nextPhase = () => {
     if (!isMyTurn || !game) return;
@@ -546,16 +642,17 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
         break;
       case GamePhase.BATTLE: next = GamePhase.END; break;
       case GamePhase.END: 
-        // Send Dream Summoned monster to GY if it still exists
+        // End Phase of a turn where Dream Phase was used: all your monsters switch to DEFENSE and 0 DEF
         const currentPlayer = nextGame.players[nextGame.activePlayerIndex];
-        if (currentPlayer.dreamSummonedInstanceId) {
-           const did = currentPlayer.dreamSummonedInstanceId;
-           const mzIdx = currentPlayer.monsterZones.indexOf(did);
-           if (mzIdx !== -1) {
-              currentPlayer.monsterZones[mzIdx] = null;
-              currentPlayer.gy.push(did);
-              pushLog(nextGame, `Dream Summoned monster was sent to GY.`, 'system');
-           }
+        if (currentPlayer.dreamSummonUsedThisTurn) {
+           currentPlayer.monsterZones.forEach(did => {
+              if (did) {
+                 currentPlayer.cardPositions[did] = "DEFENSE";
+                 if (!currentPlayer.statModifiers) currentPlayer.statModifiers = {};
+                 currentPlayer.statModifiers[did] = { def: 0 };
+              }
+           });
+           pushLog(nextGame, `End Phase (Dream Sickness): All monsters changed to Defense and 0 DEF.`, 'system');
         }
         // Reset player flags
         nextGame.players.forEach(player => {
@@ -737,7 +834,8 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     }
 
     if (targetId === 'DIRECT') {
-      damage = attackerDef?.atk || 0;
+      const { atk: actualAtk } = getCardStats(attackerId, attackerDef?.atk, attackerDef?.def);
+      damage = actualAtk;
       oppState.lp = Math.max(0, oppState.lp - damage);
       result = 'DIRECT';
     } else {
@@ -760,7 +858,9 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
       }
       
       if (targetPos === 'ATTACK') {
-        const diff = (attackerDef?.atk || 0) - (targetDef?.atk || 0);
+        const { atk: actualAtk } = getCardStats(attackerId, attackerDef?.atk, attackerDef?.def);
+        const { atk: actualTargetAtk } = getCardStats(targetId, targetDef?.atk, targetDef?.def);
+        const diff = actualAtk - actualTargetAtk;
         if (diff > 0) {
           damage = diff;
           oppState.lp = Math.max(0, oppState.lp - damage);
@@ -781,7 +881,9 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
           result = 'DESTROYED';
         }
       } else {
-        const diff = (attackerDef?.atk || 0) - (targetDef?.def || 0);
+        const { atk: actualAtk } = getCardStats(attackerId, attackerDef?.atk, attackerDef?.def);
+        const { def: actualTargetDef } = getCardStats(targetId, targetDef?.atk, targetDef?.def);
+        const diff = actualAtk - actualTargetDef;
         if (diff > 0) {
           oppState.monsterZones = oppState.monsterZones.map(id => id === targetId ? null : id);
           oppState.gy.push(targetId);
@@ -849,10 +951,8 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
   const executeAttack = async (attackerId: string, targetId: string | 'DIRECT') => {
     if (!game || !me || !opponent) return;
     
-    const attackerDef = getCardDefByInstance(attackerId);
     const nextGame = JSON.parse(JSON.stringify(game)) as SyncedGameState;
     const myState = nextGame.players[myIndex];
-    const oppState = nextGame.players[oppIndex];
 
     if (!myState.attacksMade) myState.attacksMade = {};
     const attacksMade = myState.attacksMade[attackerId] || 0;
@@ -863,15 +963,20 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
        return;
     }
 
-    if (targetId === 'DIRECT') {
-      nextGame.directAttackPrompt = attackerId;
-      nextGame.pendingAttack = { attackerId, targetId: 'DIRECT' };
-      setGame(nextGame);
-      updateServerGame(nextGame);
-      setAttackingInstanceId(null);
-      return;
-    } else {
-      await finalizeAttack(attackerId, targetId, nextGame);
+    // Set pending attack state
+    nextGame.pendingAttack = { attackerId, targetId };
+    // Clear salvationHandled for this new attack
+    nextGame.salvationHandled = false;
+
+    setAttackingInstanceId(null);
+
+    // Emit ON_ATTACK to queue triggers (SEGOC). 
+    // This will start processSegocQueue, which will prompt for Salvation if it's a DIRECT attack,
+    // or start chainPriority for normal attacks.
+    if (engineRef.current) {
+       const gameWithTriggers = await engineRef.current.emit(TriggerType.ON_ATTACK, { instanceId: attackerId, controllerIndex: myIndex, targetId }, nextGame, () => {});
+       setGame(gameWithTriggers);
+       updateServerGame(gameWithTriggers);
     }
   };
 
@@ -884,6 +989,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     const attackerDef = getCardDefByInstance(attackerId);
 
     nextGame.directAttackPrompt = undefined;
+    nextGame.salvationHandled = true;
 
     if (action === 'SALVATION' && myState.deck.length > 0 && !myState.salvationUsedThisTurn) {
       myState.salvationUsedThisTurn = true;
@@ -913,8 +1019,8 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
         return;
       }
     } else if (action === 'EFFECT') {
-      // Enter chain priority mode!
-      nextGame.chainPriority = { playerIndex: myIndex, passCount: 0 };
+      // Enter chain priority mode, meaning we resume standard Quick Effect chaining (Speed 2/3) for the direct attack
+      nextGame.chainPriority = { playerIndex: myIndex, passCount: 0, priorityLevel: 2 };
       setGame(nextGame);
       updateServerGame(nextGame);
       return;
@@ -945,6 +1051,13 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
     setSelectedPriorityItem(null);
     setInspectedInstanceId(null);
     
+    setGame(nextGame);
+    updateServerGame(nextGame);
+  };
+
+  const handleSegocSelection = async (instanceId: string, effectId: string) => {
+    if (!game || !engineRef.current) return;
+    const nextGame = engineRef.current.selectSegocTrigger(game, instanceId, effectId);
     setGame(nextGame);
     updateServerGame(nextGame);
   };
@@ -1170,14 +1283,14 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                 <div className="relative w-full flex items-center justify-center">
                   {/* ATK / DEF - Large & Centered */}
                   <div className="flex items-center filter drop-shadow-[0_4px_12px_rgba(0,0,0,1)] translate-y-0">
-                    <span className={`text-[20px] lg:text-[24px] font-black tracking-tighter tabular-nums italic transition-all duration-500 ${!isDefense ? 'text-white drop-shadow-[0_0_10px_rgba(255,255,255,0.4)]' : 'text-slate-500 opacity-40'}`} style={{ WebkitTextStroke: '0.5px rgba(0,0,0,0.8)' }}>
-                      {cardDef.atk}
+                    <span className={`text-[20px] lg:text-[24px] font-black tracking-tighter tabular-nums italic transition-all duration-500 ${!isDefense ? 'text-white drop-shadow-[0_0_10px_rgba(255,255,255,0.4)]' : 'text-slate-500 opacity-40'} ${getCardStats(instanceId, cardDef.atk, cardDef.def).atk !== cardDef.atk ? 'text-red-400' : ''}`} style={{ WebkitTextStroke: '0.5px rgba(0,0,0,0.8)' }}>
+                      {getCardStats(instanceId, cardDef.atk, cardDef.def).atk}
                     </span>
                     
                     <span className="text-[12px] text-slate-700 font-bold mx-2 opacity-30 italic self-end mb-1">/</span>
                     
-                    <span className={`text-[20px] lg:text-[24px] font-black tracking-tighter tabular-nums italic transition-all duration-500 ${isDefense ? 'text-white drop-shadow-[0_0_10px_rgba(255,255,255,0.4)]' : 'text-slate-500 opacity-40'}`} style={{ WebkitTextStroke: '0.5px rgba(0,0,0,0.8)' }}>
-                      {cardDef.def}
+                    <span className={`text-[20px] lg:text-[24px] font-black tracking-tighter tabular-nums italic transition-all duration-500 ${isDefense ? 'text-white drop-shadow-[0_0_10px_rgba(255,255,255,0.4)]' : 'text-slate-500 opacity-40'} ${getCardStats(instanceId, cardDef.atk, cardDef.def).def !== cardDef.def ? 'text-red-400' : ''}`} style={{ WebkitTextStroke: '0.5px rgba(0,0,0,0.8)' }}>
+                      {getCardStats(instanceId, cardDef.atk, cardDef.def).def}
                     </span>
                   </div>
                 </div>
@@ -1458,18 +1571,27 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
           <Zap className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-5 h-5 text-indigo-500/10" />
           
           <div className="absolute -right-28 top-1/2 -translate-y-1/2 w-28 flex flex-col items-center z-50">
-            <button 
-              disabled={!isMyTurn} 
-              onClick={(e) => { e.stopPropagation(); nextPhase(); }} 
-              className={`group relative flex items-center justify-center transition-all ${!isMyTurn ? 'opacity-30 grayscale scale-90' : 'hover:scale-110 active:scale-95'}`}
-            >
-              <div className="absolute inset-0 bg-indigo-500/10 blur-2xl rounded-full scale-150 animate-pulse" />
-              <div className="relative w-24 h-24 bg-slate-900 border-4 border-indigo-500 rounded-full flex flex-col items-center justify-center shadow-2xl">
-                  <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-0.5">{isMyTurn ? 'MY TURN' : 'WAIT'}</span>
-                  <span className="text-[11px] font-black text-white uppercase tracking-tighter leading-none">{game.phase}</span>
-                  <ChevronRight className="w-4 h-4 mt-1 text-indigo-500 animate-bounce-x" />
-              </div>
-            </button>
+            {(() => {
+              const isPhaseLocked = !!game.chainPriority || !!game.directAttackPrompt || !!game.pendingAttack;
+              return (
+                <button 
+                  disabled={!isMyTurn || isPhaseLocked} 
+                  onClick={(e) => { e.stopPropagation(); nextPhase(); }} 
+                  className={`group relative flex items-center justify-center transition-all ${!isMyTurn || isPhaseLocked ? 'opacity-30 grayscale scale-90 cursor-not-allowed' : 'hover:scale-110 active:scale-95'}`}
+                >
+                  <div className="absolute inset-0 bg-indigo-500/10 blur-2xl rounded-full scale-150 animate-pulse" />
+                  <div className="relative w-24 h-24 bg-slate-900 border-4 border-indigo-500 rounded-full flex flex-col items-center justify-center shadow-2xl">
+                      <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-0.5">{isPhaseLocked ? 'LOCKED' : (isMyTurn ? 'MY TURN' : 'WAIT')}</span>
+                      <span className="text-[11px] font-black text-white uppercase tracking-tighter leading-none">{game.phase}</span>
+                      {isPhaseLocked ? (
+                        <span className="text-[14px] mt-1">🔒</span>
+                      ) : (
+                        <ChevronRight className="w-4 h-4 mt-1 text-indigo-500 animate-bounce-x" />
+                      )}
+                  </div>
+                </button>
+              );
+            })()}
           </div>
         </div>
 
@@ -1596,25 +1718,26 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                            return locs.length === 0 || locs.includes("HAND" as any);
                        });
                        
-                       const canSummonOrSet = isMyMainPhase && !hasDreamSummoned;
+                       const canSummonOrSetMonster = isMyMainPhase && !hasDreamSummoned;
+                       const canSetSpell = isMyMainPhase;
                        const canActivateSpell = def?.type === 'SPELL' && isMyMainPhase && (!activeEffects.length || activeEffects.some(eff => !eff.canActivate || eff.canActivate(game, myIndex)));
                        const canActivateMonsterEffect = def?.type === 'MONSTER' && isMyMainPhase && hasHandEffect;
                        const canDreamSummon = isMyDreamPhase && def?.type === 'MONSTER' && !hasDreamSummoned;
                        
-                       if (!canSummonOrSet && !canActivateSpell && !canActivateMonsterEffect && !canDreamSummon) return null;
+                       if (!canSummonOrSetMonster && !canSetSpell && !canActivateSpell && !canActivateMonsterEffect && !canDreamSummon) return null;
                        if (game?.chainPriority?.isResolving) return null; // No manual actions during resolution!
 
                        return(
                        <motion.div initial={{opacity:0,y:10,scale:0.8}} animate={{opacity:1,y:-40,scale:1}} exit={{opacity:0,y:10,scale:0.8}} className="absolute -top-12 left-1/2 -translate-x-1/2 flex gap-3 z-[100]">
                          {def?.type==='MONSTER' && (
                            <>
-                             {canSummonOrSet && !normalSummonForbidden && (<button onClick={(e)=>{e.stopPropagation();if(!canAffordTribute)return;if(tributesNeeded===0){setSummoningMode({type:'SUMMON',instanceId,isNegated:false});}else{setSummoningMode({type:'SUMMON',instanceId,isNegated:false});setTributeModal({instanceId,required:tributesNeeded});setSelectedTributes([]);setSelectedHandInstanceId(null);}}} disabled={!canAffordTribute} className={`flex flex-col items-center gap-1 group/btn ${!canAffordTribute?'opacity-40 cursor-not-allowed':''}`}><div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-colors ${canAffordTribute?'bg-indigo-600 group-hover/btn:bg-indigo-500':'bg-slate-700'}`}><Zap className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded whitespace-nowrap">{tributesNeeded>0?`Cost (${tributesNeeded})`:'Summon'}</span></button>)}
+                             {canSummonOrSetMonster && !normalSummonForbidden && (<button onClick={(e)=>{e.stopPropagation();if(!canAffordTribute)return;if(tributesNeeded===0){setSummoningMode({type:'SUMMON',instanceId,isNegated:false});}else{setSummoningMode({type:'SUMMON',instanceId,isNegated:false});setTributeModal({instanceId,required:tributesNeeded});setSelectedTributes([]);setSelectedHandInstanceId(null);}}} disabled={!canAffordTribute} className={`flex flex-col items-center gap-1 group/btn ${!canAffordTribute?'opacity-40 cursor-not-allowed':''}`}><div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-colors ${canAffordTribute?'bg-indigo-600 group-hover/btn:bg-indigo-500':'bg-slate-700'}`}><Zap className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded whitespace-nowrap">{tributesNeeded>0?`Cost (${tributesNeeded})`:'Summon'}</span></button>)}
                              
-                             {canSummonOrSet && attrMatch && !normalSummonForbidden && (
+                             {canSummonOrSetMonster && attrMatch && !normalSummonForbidden && (
                                <button onClick={(e)=>{e.stopPropagation();setSummoningMode({type:'SUMMON',instanceId,isNegated:true});setSelectedHandInstanceId(null);}} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-amber-600 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-amber-500 transition-colors shadow-amber-500/20 animate-pulse"><Sparkles className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded whitespace-nowrap">Free Match</span></button>
                              )}
                              
-                             {canSummonOrSet && (
+                             {canSummonOrSetMonster && (
                                <button onClick={(e)=>{e.stopPropagation();if(!canAffordTribute)return;if(tributesNeeded===0){setSummoningMode({type:'SET',instanceId});}else{setSummoningMode({type:'SET',instanceId});setTributeModal({instanceId,required:tributesNeeded});setSelectedTributes([]);setSelectedHandInstanceId(null);}}} disabled={!canAffordTribute} className={`flex flex-col items-center gap-1 group/btn ${!canAffordTribute?'opacity-40 cursor-not-allowed':''}`}><div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-colors ${canAffordTribute?'bg-slate-700 group-hover/btn:bg-slate-600':'bg-slate-800'}`}><Shield className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Set</span></button>
                              )}
 
@@ -1636,7 +1759,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
 
                          {def?.type!=='MONSTER' && (
                            <>
-                             {canSummonOrSet && (
+                             {canSetSpell && (
                                <button onClick={(e)=>{e.stopPropagation();setSummoningMode({type:'SET',instanceId});setSelectedHandInstanceId(null);}} className="flex flex-col items-center gap-1 group/btn"><div className="w-12 h-12 bg-slate-700 rounded-full flex items-center justify-center shadow-lg group-hover/btn:bg-slate-600 transition-colors"><Shield className="w-6 h-6 text-white"/></div><span className="text-[8px] font-black text-white uppercase tracking-widest bg-slate-950 px-2 py-0.5 rounded">Set</span></button>
                              )}
                              
@@ -1980,6 +2103,55 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
         )}
       </AnimatePresence>
 
+      {/* SEGOC OPTIONAL TRIGGERS OVERLAY */}
+      <AnimatePresence>
+        {isMySegocPhase && mySegocTriggers && mySegocTriggers.length > 0 && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[950] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-slate-900 p-8 rounded-[2.5rem] border border-white/10 shadow-2xl max-w-4xl w-full"
+            >
+              <div className="text-center mb-8">
+                 <h2 className="text-3xl font-black text-white uppercase tracking-tighter drop-shadow-lg mb-2">Build Chain</h2>
+                 <p className="text-slate-400 font-bold text-sm tracking-widest uppercase">
+                    Select the next Optional Trigger to add to the chain
+                 </p>
+                 <p className="text-xs text-slate-500 mt-2">
+                    Current Chain Link: {(game?.pendingChain?.length || 0) + 1}
+                 </p>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-6 max-h-[60vh] overflow-y-auto p-4 custom-scrollbar">
+                {mySegocTriggers.map((t, i) => {
+                  const def = getCardDefByInstance(t.instanceId);
+                  const activeEffects = def?.effects || [];
+                  const effect = activeEffects.find(e => e.id === t.effectId);
+                  return def && effect && (
+                    <div 
+                      key={`segoc-${t.instanceId}-${t.effectId}-${i}`} 
+                      className="cursor-pointer transition-all hover:scale-105 opacity-80 hover:opacity-100 rounded-3xl overflow-hidden relative group"
+                      onClick={() => handleSegocSelection(t.instanceId, t.effectId)}
+                    >
+                      <Card card={def} />
+                      <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center p-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                         <span className="text-white font-black text-xs text-center uppercase mb-2">{effect.name}</span>
+                         <span className="bg-indigo-500 text-white text-[10px] px-3 py-1 rounded-full font-black uppercase tracking-wider">Select</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* ENGINE SELECTION OVERLAY */}
       <AnimatePresence>
         {engineSelectionPrompt && (
@@ -2241,7 +2413,7 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
 
       {/* PRIORITY RESPONSE PROMPT — Master Duel Style with Confirmation */}
       <AnimatePresence>
-        {game?.chainPriority && !game.chainPriority.isResolving && game.chainPriority.playerIndex === myIndex && !chainResolutionAnim && activatablePriorityInstances.length > 0 && (
+        {game?.chainPriority && !game.chainPriority.isResolving && game.chainPriority.playerIndex === myIndex && !chainResolutionAnim && !game.directAttackPrompt && activatablePriorityInstances.length > 0 && (
           <motion.div 
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
@@ -2437,9 +2609,9 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
                      {cardInstances.map((instanceId) => {
                        const def = getCardDefByInstance(instanceId);
                        return def && (
-                         <div key={instanceId} className="space-y-3 group" onClick={() => setInspectedInstanceId(instanceId)}>
-                           <Card card={def} isMiniature className="w-full hover:scale-110 hover:-translate-y-4 transition-all duration-300 cursor-zoom-in" />
-                           <p className="text-[10px] font-black text-slate-500 text-center uppercase truncate group-hover:text-white transition-colors">{def.name}</p>
+                         <div key={instanceId} className="space-y-3 flex flex-col items-center">
+                           <Card card={def} isMiniature className="w-full" />
+                           <p className="text-[10px] font-black text-slate-500 text-center uppercase truncate">{def.name}</p>
                          </div>
                        );
                      })}
@@ -2548,43 +2720,63 @@ export const DuelBoard: React.FC<DuelBoardProps> = ({ cards, decks, roomId, user
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[900] bg-black/60 backdrop-blur-sm flex items-center justify-center"
+            className={isDirectAttackPromptMinimized
+              ? "fixed bottom-8 left-8 w-16 h-16 rounded-full cursor-pointer z-[900]"
+              : "fixed inset-0 z-[900] bg-black/60 backdrop-blur-sm flex items-center justify-center"
+            }
+            onClick={() => isDirectAttackPromptMinimized && setIsDirectAttackPromptMinimized(false)}
           >
-            <motion.div 
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              className="bg-slate-900 p-10 rounded-[2.5rem] border border-fuchsia-500/30 flex flex-col items-center gap-8 shadow-[0_0_50px_rgba(217,70,239,0.2)] max-w-md w-full"
-            >
-              <div className="w-20 h-20 bg-fuchsia-500/20 rounded-full flex items-center justify-center border border-fuchsia-500/30 animate-pulse">
-                <Shield className="w-10 h-10 text-fuchsia-400" />
+            {isDirectAttackPromptMinimized ? (
+              <div className="w-full h-full bg-fuchsia-600 rounded-full flex items-center justify-center shadow-lg shadow-fuchsia-500/50 hover:bg-fuchsia-500 transition-colors animate-pulse">
+                <Shield className="w-8 h-8 text-white" />
+                <span className="absolute -top-2 -right-2 bg-rose-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center border border-slate-900">
+                  !
+                </span>
               </div>
-              <div className="text-center">
-                <h3 className="text-3xl font-black text-fuchsia-400 uppercase italic tracking-tighter mb-2">Direct Attack!</h3>
-                <p className="text-slate-300 text-sm">You are being attacked directly! Choose your response.</p>
-              </div>
-              <div className="flex flex-col gap-3 w-full">
-                {game.players[myIndex].deck.length > 0 && !game.players[myIndex].salvationUsedThisTurn && (
+            ) : (
+              <motion.div 
+                initial={{ scale: 0.9, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                className="bg-slate-900 p-10 rounded-[2.5rem] border border-fuchsia-500/30 flex flex-col items-center gap-8 shadow-[0_0_50px_rgba(217,70,239,0.2)] max-w-md w-full relative"
+              >
+                <button 
+                  onClick={(e) => { e.stopPropagation(); setIsDirectAttackPromptMinimized(true); }}
+                  className="absolute top-4 right-4 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-2 rounded-full transition-colors z-[910]"
+                  title="Minimize to view board"
+                >
+                  <Eye className="w-5 h-5" />
+                </button>
+                <div className="w-20 h-20 bg-fuchsia-500/20 rounded-full flex items-center justify-center border border-fuchsia-500/30 animate-pulse">
+                  <Shield className="w-10 h-10 text-fuchsia-400" />
+                </div>
+                <div className="text-center">
+                  <h3 className="text-3xl font-black text-fuchsia-400 uppercase italic tracking-tighter mb-2">Direct Attack!</h3>
+                  <p className="text-slate-300 text-sm">You are being attacked directly! Choose your response.</p>
+                </div>
+                <div className="flex flex-col gap-3 w-full">
+                  {game.players[myIndex].deck.length > 0 && !game.players[myIndex].salvationUsedThisTurn && (
+                    <button 
+                      onClick={() => respondToDirectAttack('SALVATION')} 
+                      className="w-full py-4 bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-black rounded-2xl uppercase transition-all shadow-lg shadow-fuchsia-600/20 active:scale-95 text-sm tracking-widest"
+                    >
+                      Use Salvation
+                    </button>
+                  )}
                   <button 
-                    onClick={() => respondToDirectAttack('SALVATION')} 
-                    className="w-full py-4 bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-black rounded-2xl uppercase transition-all shadow-lg shadow-fuchsia-600/20 active:scale-95 text-sm tracking-widest"
+                    onClick={() => respondToDirectAttack('EFFECT')} 
+                    className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-2xl uppercase transition-all shadow-lg shadow-blue-600/20 active:scale-95 text-sm tracking-widest"
                   >
-                    Use Salvation
+                    Activate Effect
                   </button>
-                )}
-                <button 
-                  onClick={() => respondToDirectAttack('EFFECT')} 
-                  className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-2xl uppercase transition-all shadow-lg shadow-blue-600/20 active:scale-95 text-sm tracking-widest"
-                >
-                  Activate Effect
-                </button>
-                <button 
-                  onClick={() => respondToDirectAttack('DAMAGE')} 
-                  className="w-full py-4 bg-slate-800 hover:bg-red-500/80 text-white font-black rounded-2xl uppercase transition-all active:scale-95 text-sm tracking-widest"
-                >
-                  Take Damage
-                </button>
-              </div>
-            </motion.div>
+                  <button 
+                    onClick={() => respondToDirectAttack('DAMAGE')} 
+                    className="w-full py-4 bg-slate-800 hover:bg-red-500/80 text-white font-black rounded-2xl uppercase transition-all active:scale-95 text-sm tracking-widest"
+                  >
+                    Take Damage
+                  </button>
+                </div>
+              </motion.div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

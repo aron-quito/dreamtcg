@@ -16,6 +16,7 @@ export enum GamePhase {
 }
 
 export enum CardAttribute {
+  NONE = "NONE",
   DARK = "DARK",
   LIGHT = "LIGHT",
   EARTH = "EARTH",
@@ -84,6 +85,10 @@ export interface CardEffect {
   name: string;
   restriction: Restriction;
   trigger: Trigger;
+  isMandatory?: boolean;
+  speed?: 1 | 2 | 3; // 1 = Trigger, 2 = Quick, 3 = Counter
+  causaText?: string;
+  efectoText?: string;
   costs?: Cost[];
   resolutions?: Resolution[];
   execute?: (ctx: any) => any | Promise<any>;
@@ -94,19 +99,33 @@ export interface CardDefinition {
   id: string;
   name: string;
   type: CardType;
+  attribute: CardAttribute;
   level?: number;
   atk?: number;
   def?: number;
-  attribute?: CardAttribute;
   description: string;
   effects: CardEffect[];
-  image?: string; // Base64 or URL
-  isCustom: boolean;
+  image?: string;
+  isCustom?: boolean;
   isPublic?: boolean;
-  limit?: number; // 0, 1, 2, 3
+  limit?: number; // 0=Banned, 1=Limited, 2=Semi, 3=Unlimited
+  canBeUltra?: boolean;
   mainAdjustments?: { x: number; y: number; zoom: number };
   mini1Adjustments?: { x: number; y: number; zoom: number };
   mini2Adjustments?: { x: number; y: number; zoom: number };
+}
+
+export interface PhysicalCard {
+  id: string; // uuid
+  templateId: string; // points to CardDefinition.id
+  ownerEmail: string;
+  quality: 'NORMAL' | 'SPECIAL' | 'EPIC' | 'ULTRA';
+  durability: number;
+  maxDurability: number;
+  originalOwner: string;
+  serialNumber?: number;
+  winCount: number;
+  createdAt: string;
 }
 
 // --- ENGINE STATE ---
@@ -128,8 +147,10 @@ export interface PlayerState {
   attacksMade: Record<string, number>; // instanceId -> count
   negatedInstances: string[]; // instanceIds with negated effects
   dreamSummonUsedThisTurn?: boolean;
+  dreamSummonAttackDeclared?: boolean;
   dreamSummonedInstanceId?: string | null;
   salvationUsedThisTurn?: boolean;
+  statModifiers?: Record<string, { atk?: number, def?: number }>; // instanceId -> modifiers
 }
 
 export interface DeckDefinition {
@@ -146,9 +167,17 @@ export interface PendingChainLink {
   costPaid?: boolean;
 }
 
+export interface QueuedTrigger {
+  instanceId: string;
+  effectId: string;
+  controllerIndex: 0 | 1;
+  isMandatory: boolean;
+}
+
 export interface ChainPriority {
   playerIndex: number; // The player whose turn it is to respond, or to resolve a link if isResolving is true
   passCount: number;   // How many consecutive passes have occurred
+  priorityLevel?: 1 | 2 | 3; // Current speed level of the window (1=Trigger, 2=Quick, 3=Counter)
   isResolving?: boolean; // If true, the chain is currently resolving step-by-step
 }
 
@@ -167,4 +196,7 @@ export interface GameState {
     attackerId: string;
     targetId: string | 'DIRECT';
   };
+  queuedTriggers?: QueuedTrigger[];
+  segocPhase?: "TP_OPTIONAL" | "OPP_OPTIONAL";
+  salvationHandled?: boolean;
 }
